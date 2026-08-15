@@ -13,6 +13,8 @@ node_modules/
 npm-debug.log*
 .cache/
 
-# Local exports
-*.png
-!docs/screenshot-placeholder.png
+# Exports that land in the repo root by accident
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
