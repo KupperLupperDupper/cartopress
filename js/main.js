@@ -4,9 +4,15 @@
 
 import { geocode, debounce, splitDisplayName } from './geocode.js';
 import {
-  LAYER_LIST,
+  LAYER_GROUPS,
   getLayer,
+  resolveLayer,
+  supportsLabelToggle,
+  buildTileUrl,
+  lonToPixelX,
+  latToPixelY,
   metersPerPixel,
+  TILE_SIZE,
   EARTH_METERS_PER_PIXEL
 } from './tiles.js';
 import {
@@ -23,13 +29,36 @@ import {
 
 const STORAGE_KEY = 'cityfromabove:last';
 
+/** Shown when a link carries coordinates but no name we can trust. */
+const SHARED_VIEW_NAME = 'Shared view';
+
+/** Every preset the dropdown offers, so custom sizes can be detected. */
 const RESOLUTIONS = [
   '1080x1080',
+  '1440x1440',
   '2048x2048',
+  '4096x4096',
   '1920x1080',
   '2560x1440',
   '3840x2160',
-  '1080x1920'
+  '5120x2880',
+  '1080x1920',
+  '1290x2796',
+  '2160x2700',
+  '2480x3508',
+  '3508x4961',
+  '5400x3600'
+];
+
+/**
+ * Download formats. JPG and JPEG are the same encoder — they differ only in
+ * the extension written to disk, which some tools and print shops care about.
+ */
+const FORMATS = [
+  { id: 'png', label: 'PNG', mime: 'image/png', ext: 'png', lossy: false },
+  { id: 'jpg', label: 'JPG', mime: 'image/jpeg', ext: 'jpg', lossy: true },
+  { id: 'jpeg', label: 'JPEG', mime: 'image/jpeg', ext: 'jpeg', lossy: true },
+  { id: 'webp', label: 'WEBP', mime: 'image/webp', ext: 'webp', lossy: true }
 ];
 
 const MIN_KM = 0.5;
@@ -105,6 +134,17 @@ const el = {
   coverageOut: document.getElementById('coverageOut'),
   detailHint: document.getElementById('detailHint'),
   filters: document.getElementById('filters'),
+  labels: document.getElementById('labels'),
+  labelsSwitch: document.getElementById('labelsSwitch'),
+  labelsHint: document.getElementById('labelsHint'),
+  swapOrientation: document.getElementById('swapOrientation'),
+  formats: document.getElementById('formats'),
+  formatHint: document.getElementById('formatHint'),
+  qualityField: document.getElementById('qualityField'),
+  quality: document.getElementById('quality'),
+  qualityOut: document.getElementById('qualityOut'),
+  captionToggle: document.getElementById('captionToggle'),
+  captionText: document.getElementById('captionText'),
   generate: document.getElementById('generate'),
   generateLabel: document.getElementById('generateLabel'),
   progress: document.getElementById('progress'),
@@ -125,14 +165,20 @@ const state = {
   zoom: 13,
   placeName: 'Barcelona, Spain',
   layerId: 'satellite',
+  labels: false,
   width: 3840,
   height: 2160,
   coverageKm: 8,
-  filter: 'none'
+  filter: 'none',
+  format: 'png',
+  quality: 0.92,
+  caption: false,
+  captionText: ''
 };
 
 let map;
 let tileLayer;
+let overlayLayers = [];
 let rendering = false;
 let suppressHashUpdate = false;
 let activeResultIndex = -1;
@@ -178,19 +224,38 @@ function initMap() {
     state.zoom = map.getZoom();
     updateReadouts();
     writeHash();
+    scheduleThumbnailRefresh();
   });
 }
 
 function applyTileLayer() {
-  const layer = getLayer(state.layerId);
+  const layer = resolveLayer(state.layerId, state.labels);
+
   if (tileLayer) map.removeLayer(tileLayer);
-  tileLayer = L.tileLayer(layer.url, {
+  overlayLayers.forEach((l) => map.removeLayer(l));
+  overlayLayers = [];
+
+  const common = {
     maxZoom: layer.maxZoom,
     maxNativeZoom: layer.maxZoom,
     subdomains: layer.subdomains || 'abc',
-    attribution: layer.leafletAttribution,
     crossOrigin: 'anonymous'
+  };
+
+  tileLayer = L.tileLayer(layer.url, {
+    ...common,
+    attribution: layer.leafletAttribution
   }).addTo(map);
+
+  // Label overlays sit on top of the basemap in the same pane.
+  overlayLayers = layer.overlays.map((url, i) =>
+    L.tileLayer(url, { ...common, zIndex: 10 + i }).addTo(map)
+  );
+
+  // Styles like Neon are a filter chain over a plain basemap. Applying it to
+  // the tile pane keeps the preview honest about what will be exported.
+  const pane = map.getPane('tilePane');
+  if (pane) pane.style.filter = layer.filterCss || '';
 
   el.footerAttribution.textContent =
     `${layer.attribution} · Geocoding by Nominatim / OpenStreetMap.`;
@@ -202,20 +267,105 @@ function applyTileLayer() {
 
 function buildStyleButtons() {
   el.styles.innerHTML = '';
-  LAYER_LIST.forEach((layer) => {
+
+  Object.entries(LAYER_GROUPS).forEach(([group, layers]) => {
+    const heading = document.createElement('p');
+    heading.className = 'style-group';
+    heading.textContent = group;
+    el.styles.appendChild(heading);
+
+    layers.forEach((layer) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'style-btn';
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-checked', String(layer.id === state.layerId));
+      btn.title = layer.label;
+      btn.dataset.layer = layer.id;
+      btn.innerHTML =
+        `<span class="style-swatch" style="background-image:${layer.swatch}"></span>` +
+        `<span class="style-name"></span>`;
+      btn.querySelector('.style-name').textContent = layer.label;
+      btn.addEventListener('click', () => selectLayer(layer.id));
+      el.styles.appendChild(btn);
+    });
+  });
+}
+
+/**
+ * Repaint each style swatch with a real tile of wherever the user is looking,
+ * so the picker previews the actual place rather than an abstract colour chip.
+ */
+function refreshStyleThumbnails() {
+  const center = map.getCenter();
+
+  [...el.styles.querySelectorAll('.style-btn')].forEach((btn) => {
+    const base = getLayer(btn.dataset.layer);
+    const layer = resolveLayer(btn.dataset.layer, state.labels);
+    const zoom = Math.min(12, layer.maxZoom);
+    const x = Math.floor(lonToPixelX(center.lng, zoom) / TILE_SIZE);
+    const y = Math.floor(latToPixelY(center.lat, zoom) / TILE_SIZE);
+    const url = buildTileUrl(layer.url, x, y, zoom, layer.subdomains);
+
+    const swatch = btn.querySelector('.style-swatch');
+    swatch.style.filter = base.filterCss || '';
+    if (swatch.dataset.url === url) return;
+    swatch.dataset.url = url;
+    // The gradient stays behind the tile as a fallback if the request fails.
+    swatch.style.backgroundImage = `url("${url}"), ${base.swatch}`;
+  });
+}
+
+/** Debounced so a long pan does not fire a dozen thumbnail requests per style. */
+let thumbTimer = null;
+function scheduleThumbnailRefresh() {
+  clearTimeout(thumbTimer);
+  thumbTimer = setTimeout(refreshStyleThumbnails, 700);
+}
+
+function buildFormatChips() {
+  el.formats.innerHTML = '';
+  FORMATS.forEach((f) => {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'style-btn';
+    btn.className = 'chip';
     btn.setAttribute('role', 'radio');
-    btn.setAttribute('aria-checked', String(layer.id === state.layerId));
-    btn.dataset.layer = layer.id;
-    btn.innerHTML =
-      `<span class="style-swatch" style="background:${layer.swatch}"></span>` +
-      `<span class="style-name"></span>`;
-    btn.querySelector('.style-name').textContent = layer.label;
-    btn.addEventListener('click', () => selectLayer(layer.id));
-    el.styles.appendChild(btn);
+    btn.dataset.format = f.id;
+    btn.textContent = f.label;
+
+    if (!formatSupported(f)) {
+      btn.disabled = true;
+      btn.title = `${f.label} encoding is not supported by this browser`;
+      btn.style.opacity = '0.4';
+    } else {
+      btn.addEventListener('click', () => selectFormat(f.id));
+    }
+    el.formats.appendChild(btn);
   });
+  selectFormat(state.format);
+}
+
+/** Canvas encoders vary by browser; ask before offering the option. */
+function formatSupported(format) {
+  if (format.mime === 'image/png' || format.mime === 'image/jpeg') return true;
+  const probe = document.createElement('canvas');
+  probe.width = probe.height = 1;
+  return probe.toDataURL(format.mime).startsWith(`data:${format.mime}`);
+}
+
+function selectFormat(id) {
+  const format = FORMATS.find((f) => f.id === id) || FORMATS[0];
+  state.format = format.id;
+
+  [...el.formats.children].forEach((c) =>
+    c.setAttribute('aria-checked', String(c.dataset.format === format.id))
+  );
+  el.qualityField.hidden = !format.lossy;
+  el.formatHint.textContent = format.lossy
+    ? format.id === 'webp'
+      ? 'WEBP: much smaller than PNG at similar quality.'
+      : 'JPG and JPEG are the same encoder — only the file extension differs.'
+    : 'PNG is lossless, and by far the largest file.';
 }
 
 function buildFilterChips() {
@@ -240,17 +390,43 @@ function buildFilterChips() {
 
 function selectLayer(id) {
   state.layerId = id;
-  [...el.styles.children].forEach((c) =>
+  [...el.styles.querySelectorAll('.style-btn')].forEach((c) =>
     c.setAttribute('aria-checked', String(c.dataset.layer === id))
   );
+
+  updateLabelSwitch();
   applyTileLayer();
 
-  // Terrain tops out at zoom 17; keep the preview inside the layer's range.
+  // Several layers top out below 19; keep the preview inside the range.
   const layer = getLayer(id);
   if (map.getZoom() > layer.maxZoom) map.setZoom(layer.maxZoom);
 
+  refreshStyleThumbnails();
   updateReadouts();
   writeHash();
+}
+
+/**
+ * Not every basemap can have its labels stripped: CARTO ships label-free
+ * variants, Esri's canvases keep labels in a separate overlay, but the likes of
+ * OpenTopoMap bake them into the tile. Reflect that honestly in the switch.
+ */
+function updateLabelSwitch() {
+  const layer = getLayer(state.layerId);
+  const canToggle = supportsLabelToggle(layer);
+
+  el.labels.disabled = !canToggle;
+  el.labelsSwitch.classList.toggle('is-disabled', !canToggle);
+  el.labels.checked = canToggle ? state.labels : !layer.labelsNever;
+
+  if (canToggle) {
+    el.labelsHint.hidden = true;
+  } else {
+    el.labelsHint.hidden = false;
+    el.labelsHint.textContent = layer.labelsNever
+      ? `${layer.label} is shaded terrain only — there are no labels to remove.`
+      : `${layer.label} bakes its labels into the tiles, so they cannot be removed.`;
+  }
 }
 
 /* ------------------------------------------------------------------
@@ -297,7 +473,9 @@ function bindControls() {
   });
 
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('.field')) hideResults();
+    if (!e.target.closest('.search-wrap') && !e.target.closest('.results')) {
+      hideResults();
+    }
   });
 
   // --- Resolution -------------------------------------------------
@@ -343,12 +521,59 @@ function bindControls() {
     writeHash();
   });
 
+  // --- Labels -----------------------------------------------------
+  el.labels.addEventListener('change', () => {
+    state.labels = el.labels.checked;
+    applyTileLayer();
+    refreshStyleThumbnails();
+    updateReadouts();
+    writeHash();
+  });
+
+  // --- Orientation ------------------------------------------------
+  el.swapOrientation.addEventListener('click', () => {
+    const { width, height } = state;
+    state.width = height;
+    state.height = width;
+    syncControlsFromState();
+    updateEverything();
+    fitFrame();
+  });
+
+  // --- Format, quality, caption -----------------------------------
+  el.quality.addEventListener('input', () => {
+    state.quality = Number(el.quality.value) / 100;
+    el.qualityOut.textContent = el.quality.value;
+  });
+
+  el.captionToggle.addEventListener('change', () => {
+    state.caption = el.captionToggle.checked;
+    el.captionText.hidden = !state.caption;
+    if (state.caption && !el.captionText.value) {
+      el.captionText.value = defaultCaption();
+      state.captionText = el.captionText.value;
+    }
+  });
+
+  el.captionText.addEventListener('input', () => {
+    state.captionText = el.captionText.value;
+  });
+
   // --- Buttons ----------------------------------------------------
   el.fitFrame.addEventListener('click', fitFrame);
   el.surprise.addEventListener('click', surpriseMe);
   el.generate.addEventListener('click', generate);
 
-  window.addEventListener('resize', updateFrame);
+  // Leaflet tracks the resize itself; we only need to re-measure the frame, and
+  // pull the view back if the new size left the frame larger than the map.
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    updateFrame();
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (el.frame.classList.contains('oversized')) fitFrame();
+    }, 250);
+  });
   window.addEventListener('hashchange', () => {
     if (suppressHashUpdate) return;
     if (readHash()) {
@@ -526,7 +751,9 @@ function updateReadouts() {
 
   el.coverageOut.textContent = `${formatKm(state.coverageKm)} km`;
   el.detailHint.textContent =
-    `${gsdText} in the export · source zoom ${plan.zoom} · ${plan.tileCount} tiles`;
+    `${gsdText} in the export · source zoom ${plan.zoom} · ` +
+    `${plan.tileCount} tiles` +
+    (plan.passes > 1 ? ` (${plan.tilesPerPass} + labels)` : '');
 
   el.placeName.textContent = state.placeName || 'Custom location';
   el.placeMeta.textContent =
@@ -564,10 +791,12 @@ async function generate() {
       lat: state.lat,
       lon: state.lon,
       layerId: state.layerId,
+      labels: state.labels,
       width: state.width,
       height: state.height,
       coverageKm: state.coverageKm,
       filter: state.filter,
+      caption: state.caption ? state.captionText || defaultCaption() : null,
       onProgress: ({ loaded, total, phase }) => {
         if (phase === 'compose') {
           setProgress(1, 'Composing and downscaling…');
@@ -577,9 +806,14 @@ async function generate() {
       }
     });
 
-    setProgress(1, 'Encoding PNG…');
-    const blob = await canvasToBlob(canvas);
-    downloadBlob(blob, buildFilename());
+    const format = FORMATS.find((f) => f.id === state.format) || FORMATS[0];
+    setProgress(1, `Encoding ${format.label}…`);
+    const blob = await canvasToBlob(
+      canvas,
+      format.mime,
+      format.lossy ? state.quality : undefined
+    );
+    downloadBlob(blob, buildFilename(format));
 
     const size = (blob.size / 1024 / 1024).toFixed(1);
     const note = failedTiles
@@ -609,11 +843,25 @@ async function generate() {
   }
 }
 
-function buildFilename() {
-  const base = slugify(
-    (state.placeName || 'map').split(',')[0] || 'map'
-  );
-  return `${base || 'map'}-${state.width}x${state.height}.png`;
+function buildFilename(format) {
+  const base = slugify(shortPlaceName() || 'map');
+  return `${base || 'map'}-${state.width}x${state.height}.${format.ext}`;
+}
+
+/** "Kyoto · 35.0116, 135.7681" — the default burned-in caption. */
+function defaultCaption() {
+  const coords = `${state.lat.toFixed(4)}, ${state.lon.toFixed(4)}`;
+  const name = shortPlaceName();
+  return name ? `${name} · ${coords}` : coords;
+}
+
+/** Just the leading part of the place name, ignoring the shared-link filler. */
+function shortPlaceName() {
+  const raw =
+    state.placeName && state.placeName !== SHARED_VIEW_NAME
+      ? state.placeName
+      : el.search.value;
+  return (raw || '').split(',')[0].trim();
 }
 
 function downloadBlob(blob, filename) {
@@ -654,7 +902,8 @@ function writeHashNow() {
   const hash =
     `#${state.lat.toFixed(5)},${state.lon.toFixed(5)},` +
     `${Number(state.zoom).toFixed(2)},${state.layerId},` +
-    `${state.width}x${state.height},${state.coverageKm.toFixed(2)}`;
+    `${state.width}x${state.height},${state.coverageKm.toFixed(2)},` +
+    `${state.labels ? 'labels' : 'nolabels'}`;
   if (hash === location.hash) return;
   suppressHashUpdate = true;
   history.replaceState(null, '', hash);
@@ -667,7 +916,7 @@ function readHash() {
   const raw = location.hash.replace(/^#/, '');
   if (!raw) return false;
 
-  const [lat, lon, zoom, style, resolution, coverage] = raw.split(',');
+  const [lat, lon, zoom, style, resolution, coverage, labels] = raw.split(',');
   const latN = parseFloat(lat);
   const lonN = parseFloat(lon);
   if (!isFinite(latN) || !isFinite(lonN)) return false;
@@ -686,23 +935,45 @@ function readHash() {
   const cov = parseFloat(coverage);
   if (isFinite(cov)) state.coverageKm = clamp(cov, MIN_KM, MAX_KM);
 
-  state.placeName = 'Shared view';
+  if (labels) state.labels = labels === 'labels';
+
+  state.placeName = SHARED_VIEW_NAME;
   return true;
 }
 
 /** Returns 'hash', 'storage', or null depending on where the view came from. */
 function restoreState() {
-  if (readHash()) return 'hash';
+  const fromHash = readHash();
+  const saved = readSaved();
 
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-    if (saved && isFinite(saved.lat) && isFinite(saved.lon)) {
-      state.lat = saved.lat;
-      state.lon = saved.lon;
+  if (fromHash) {
+    // Reloading your own tab is far more common than opening someone else's
+    // link: if the saved place sits at these coordinates, keep its name.
+    if (
+      saved &&
+      Math.abs(saved.lat - state.lat) < 0.002 &&
+      Math.abs(saved.lon - state.lon) < 0.002
+    ) {
       state.placeName = saved.placeName || state.placeName;
       if (saved.query) el.search.value = saved.query;
-      return 'storage';
     }
+    return 'hash';
+  }
+
+  if (saved) {
+    state.lat = saved.lat;
+    state.lon = saved.lon;
+    state.placeName = saved.placeName || state.placeName;
+    if (saved.query) el.search.value = saved.query;
+    return 'storage';
+  }
+  return null;
+}
+
+function readSaved() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (saved && isFinite(saved.lat) && isFinite(saved.lon)) return saved;
   } catch (err) {
     /* corrupt or unavailable storage — fall back to the default view */
   }
@@ -742,13 +1013,19 @@ function syncControlsFromState() {
   }
 
   el.coverage.value = kmToSlider(state.coverageKm);
+  el.quality.value = Math.round(state.quality * 100);
+  el.qualityOut.textContent = el.quality.value;
+  el.captionToggle.checked = state.caption;
+  el.captionText.hidden = !state.caption;
 
-  [...el.styles.children].forEach((c) =>
+  [...el.styles.querySelectorAll('.style-btn')].forEach((c) =>
     c.setAttribute('aria-checked', String(c.dataset.layer === state.layerId))
   );
   [...el.filters.children].forEach((c) =>
     c.setAttribute('aria-checked', String(c.dataset.filter === state.filter))
   );
+
+  updateLabelSwitch();
 }
 
 function formatKm(km) {
@@ -776,9 +1053,11 @@ function clamp(v, lo, hi) {
 const restoredFrom = restoreState();
 buildStyleButtons();
 buildFilterChips();
+buildFormatChips();
 initMap();
 bindControls();
 syncControlsFromState();
 updateEverything();
+refreshStyleThumbnails();
 // A shared link carries its own zoom; anything else should open already framed.
 if (restoredFrom !== 'hash') fitFrame();

@@ -10,7 +10,7 @@
 
 import {
   TILE_SIZE,
-  getLayer,
+  resolveLayer,
   buildTileUrl,
   lonToPixelX,
   latToPixelY,
@@ -28,7 +28,9 @@ const BACKDROP = '#12141a';
 export const FILTERS = [
   { id: 'none', label: 'None' },
   { id: 'contrast', label: 'High contrast' },
+  { id: 'vivid', label: 'Vivid' },
   { id: 'faded', label: 'Faded' },
+  { id: 'noir', label: 'Noir' },
   { id: 'duotone', label: 'Duotone' }
 ];
 
@@ -47,8 +49,16 @@ export class TaintedCanvasError extends Error {
  * Work out the render geometry for a request without fetching anything.
  * Exposed separately so the UI can show zoom / detail figures live.
  */
-export function planRender({ lat, lon, layerId, width, height, coverageKm }) {
-  const layer = getLayer(layerId);
+export function planRender({
+  lat,
+  lon,
+  layerId,
+  labels = true,
+  width,
+  height,
+  coverageKm
+}) {
+  const layer = resolveLayer(layerId, labels);
   const coverageMeters = Math.max(1, coverageKm * 1000);
 
   let zoom = zoomForCoverage(lat, width, coverageMeters, layer.maxZoom);
@@ -80,6 +90,9 @@ export function planRender({ lat, lon, layerId, width, height, coverageKm }) {
   const y0 = Math.floor(top / TILE_SIZE);
   const y1 = Math.floor((top + renderHeight - 1) / TILE_SIZE);
 
+  const tilesPerPass = (x1 - x0 + 1) * (y1 - y0 + 1);
+  const passes = 1 + layer.overlays.length;
+
   return {
     layer,
     zoom,
@@ -95,7 +108,9 @@ export function planRender({ lat, lon, layerId, width, height, coverageKm }) {
     x1,
     y0,
     y1,
-    tileCount: (x1 - x0 + 1) * (y1 - y0 + 1),
+    tilesPerPass,
+    passes,
+    tileCount: tilesPerPass * passes,
     clamped: zoom >= layer.maxZoom && renderWidth < width
   };
 }
@@ -109,6 +124,7 @@ export async function renderExport(options) {
     width,
     height,
     filter = 'none',
+    caption = null,
     onProgress = () => {},
     signal
   } = options;
@@ -147,38 +163,52 @@ export async function renderExport(options) {
   let failedTiles = 0;
   onProgress({ loaded: 0, total: tileCount, phase: 'tiles' });
 
-  await runPool(jobs, MAX_CONCURRENT_TILES, async ({ tx, ty }) => {
-    if (signal && signal.aborted) return;
+  // The basemap first, then any transparent label overlays on top of it.
+  const passTemplates = [layer.url, ...layer.overlays];
 
-    const dx = tx * TILE_SIZE - left;
-    const dy = ty * TILE_SIZE - top;
+  for (let pass = 0; pass < passTemplates.length; pass++) {
+    const template = passTemplates[pass];
+    const isOverlay = pass > 0;
 
-    // Rows outside the projection simply do not exist; columns wrap around.
-    if (ty < 0 || ty >= worldTiles) {
-      ctx.fillStyle = PLACEHOLDER_FILL;
-      ctx.fillRect(dx, dy, TILE_SIZE, TILE_SIZE);
-    } else {
-      const wrappedX = ((tx % worldTiles) + worldTiles) % worldTiles;
-      const url = buildTileUrl(layer, wrappedX, ty, zoom);
-      const img = await loadTile(url, signal);
-      if (img) {
-        ctx.drawImage(img, dx, dy, TILE_SIZE, TILE_SIZE);
+    await runPool(jobs, MAX_CONCURRENT_TILES, async ({ tx, ty }) => {
+      if (signal && signal.aborted) return;
+
+      const dx = tx * TILE_SIZE - left;
+      const dy = ty * TILE_SIZE - top;
+
+      // Rows outside the projection do not exist; columns wrap around.
+      if (ty < 0 || ty >= worldTiles) {
+        if (!isOverlay) {
+          ctx.fillStyle = PLACEHOLDER_FILL;
+          ctx.fillRect(dx, dy, TILE_SIZE, TILE_SIZE);
+        }
       } else {
-        failedTiles++;
-        ctx.fillStyle = PLACEHOLDER_FILL;
-        ctx.fillRect(dx, dy, TILE_SIZE, TILE_SIZE);
+        const wrappedX = ((tx % worldTiles) + worldTiles) % worldTiles;
+        const url = buildTileUrl(template, wrappedX, ty, zoom, layer.subdomains);
+        const img = await loadTile(url, signal);
+        if (img) {
+          ctx.drawImage(img, dx, dy, TILE_SIZE, TILE_SIZE);
+        } else {
+          failedTiles++;
+          // A missing label tile just means no labels there; only the basemap
+          // is worth flagging with a placeholder.
+          if (!isOverlay) {
+            ctx.fillStyle = PLACEHOLDER_FILL;
+            ctx.fillRect(dx, dy, TILE_SIZE, TILE_SIZE);
+          }
+        }
       }
-    }
 
-    loaded++;
-    onProgress({ loaded, total: tileCount, phase: 'tiles' });
-  });
+      loaded++;
+      onProgress({ loaded, total: tileCount, phase: 'tiles' });
+    });
 
-  if (signal && signal.aborted) throw abortError();
+    if (signal && signal.aborted) throw abortError();
+  }
 
   onProgress({ loaded: tileCount, total: tileCount, phase: 'compose' });
-  const canvas = downscale(stage, width, height, filter);
-  drawAttribution(canvas, layer.attribution);
+  const canvas = downscale(stage, width, height, filter, layer.filterCss);
+  drawCredits(canvas, layer.attribution, caption);
 
   return { canvas, plan, failedTiles };
 }
@@ -231,7 +261,7 @@ async function runPool(items, limit, worker) {
 /* Compositing                                                         */
 /* ------------------------------------------------------------------ */
 
-function downscale(source, targetWidth, targetHeight, filter) {
+function downscale(source, targetWidth, targetHeight, filter, layerFilter) {
   let current = source;
 
   // Halve in steps when the reduction is large — a single big downscale loses
@@ -258,7 +288,8 @@ function downscale(source, targetWidth, targetHeight, filter) {
   octx.imageSmoothingEnabled = true;
   octx.imageSmoothingQuality = 'high';
 
-  const cssFilter = filterString(filter);
+  // A layer may carry its own look (Neon), which the chosen finish stacks onto.
+  const cssFilter = [layerFilter, filterString(filter)].filter(Boolean).join(' ');
   if (cssFilter) octx.filter = cssFilter;
   octx.drawImage(current, 0, 0, targetWidth, targetHeight);
   octx.filter = 'none';
@@ -279,8 +310,12 @@ function filterString(filter) {
   switch (filter) {
     case 'contrast':
       return 'contrast(1.16) saturate(1.12) brightness(1.02)';
+    case 'vivid':
+      return 'saturate(1.38) contrast(1.06)';
     case 'faded':
       return 'contrast(0.9) saturate(0.72) brightness(1.06)';
+    case 'noir':
+      return 'grayscale(1) contrast(1.24) brightness(0.98)';
     case 'duotone':
       return 'grayscale(1) contrast(1.06)';
     default:
@@ -314,33 +349,52 @@ function applyDuotone(canvas) {
 }
 
 /**
- * Burn the layer's attribution into the bottom-right corner. This is a
- * licensing requirement for every provider used here, not a watermark.
+ * Burn the layer's attribution into the bottom-right corner, and an optional
+ * caption into the bottom-left. The attribution is a licensing requirement for
+ * every provider used here, not a watermark.
  */
-function drawAttribution(canvas, text) {
+function drawCredits(canvas, attribution, caption) {
   const ctx = canvas.getContext('2d');
   const { width: w, height: h } = canvas;
-
   const fontSize = clamp(Math.round(h * 0.016), 11, 40);
+  const margin = clamp(Math.round(Math.min(w, h) * 0.02), 8, 48);
+
+  drawPill(ctx, attribution, {
+    fontSize,
+    align: 'right',
+    x: w - margin,
+    y: h - margin
+  });
+
+  if (caption) {
+    drawPill(ctx, caption, {
+      fontSize: Math.round(fontSize * 1.15),
+      align: 'left',
+      x: margin,
+      y: h - margin
+    });
+  }
+}
+
+/** Draw one rounded, semi-transparent pill anchored at a bottom corner. */
+function drawPill(ctx, text, { fontSize, align, x, y }) {
+  ctx.save();
   ctx.font = `500 ${fontSize}px "Inter", "Helvetica Neue", Arial, sans-serif`;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
 
   const padX = fontSize * 0.85;
   const padY = fontSize * 0.5;
-  const textWidth = ctx.measureText(text).width;
-  const pillW = textWidth + padX * 2;
+  const pillW = ctx.measureText(text).width + padX * 2;
   const pillH = fontSize + padY * 2;
-  const margin = clamp(Math.round(Math.min(w, h) * 0.02), 8, 48);
-  const x = w - margin - pillW;
-  const y = h - margin - pillH;
+  const px = align === 'right' ? x - pillW : x;
+  const py = y - pillH;
 
-  ctx.save();
-  roundRect(ctx, x, y, pillW, pillH, pillH / 2);
+  roundRect(ctx, px, py, pillW, pillH, pillH / 2);
   ctx.fillStyle = 'rgba(8, 10, 14, 0.55)';
   ctx.fill();
   ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-  ctx.fillText(text, x + padX, y + pillH / 2 + fontSize * 0.04);
+  ctx.fillText(text, px + padX, py + pillH / 2 + fontSize * 0.04);
   ctx.restore();
 }
 
@@ -362,17 +416,21 @@ function roundRect(ctx, x, y, w, h, r) {
 /* Output                                                              */
 /* ------------------------------------------------------------------ */
 
-/** Encode to PNG. Throws TaintedCanvasError if the canvas is cross-origin dirty. */
-export function canvasToBlob(canvas, type = 'image/png') {
+/** Encode the canvas. Throws TaintedCanvasError if it is cross-origin dirty. */
+export function canvasToBlob(canvas, type = 'image/png', quality) {
   return new Promise((resolve, reject) => {
     try {
       // Probe first: a tainted canvas fails here predictably, whereas toBlob
       // may either throw or hand back null depending on the browser.
       canvas.getContext('2d').getImageData(0, 0, 1, 1);
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error('The browser could not encode the image.'));
-      }, type);
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error('The browser could not encode the image.'));
+        },
+        type,
+        quality
+      );
     } catch (err) {
       if (err && (err.name === 'SecurityError' || /taint/i.test(err.message))) {
         reject(new TaintedCanvasError());

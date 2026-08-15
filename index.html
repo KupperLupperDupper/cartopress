@@ -147,31 +147,74 @@
         <div class="field">
           <span class="field-label">Style</span>
           <div class="style-grid" id="styles" role="radiogroup" aria-label="Map style"></div>
+
+          <label class="switch" id="labelsSwitch">
+            <input type="checkbox" id="labels" checked />
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-text">Road names and labels</span>
+          </label>
+          <p class="hint" id="labelsHint" hidden></p>
         </div>
 
         <!-- Resolution -->
         <div class="field">
           <label class="field-label" for="resolution">Resolution</label>
-          <div class="select-wrap">
-            <select id="resolution">
-              <option value="1080x1080">1080 × 1080 — square</option>
-              <option value="2048x2048">2048 × 2048 — square, large</option>
-              <option value="1920x1080">1920 × 1080 — HD</option>
-              <option value="2560x1440">2560 × 1440 — QHD</option>
-              <option value="3840x2160" selected>3840 × 2160 — 4K</option>
-              <option value="1080x1920">1080 × 1920 — phone</option>
-              <option value="custom">Custom…</option>
-            </select>
-            <svg viewBox="0 0 20 20" aria-hidden="true" class="icon select-chevron">
-              <path
-                d="m6 8 4 4 4-4"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
+          <div class="select-row">
+            <div class="select-wrap">
+              <select id="resolution">
+                <optgroup label="Square">
+                  <option value="1080x1080">1080 × 1080</option>
+                  <option value="1440x1440">1440 × 1440</option>
+                  <option value="2048x2048">2048 × 2048</option>
+                  <option value="4096x4096">4096 × 4096</option>
+                </optgroup>
+                <optgroup label="Landscape">
+                  <option value="1920x1080">1920 × 1080 — HD</option>
+                  <option value="2560x1440">2560 × 1440 — QHD</option>
+                  <option value="3840x2160" selected>3840 × 2160 — 4K</option>
+                  <option value="5120x2880">5120 × 2880 — 5K</option>
+                </optgroup>
+                <optgroup label="Portrait">
+                  <option value="1080x1920">1080 × 1920 — phone</option>
+                  <option value="1290x2796">1290 × 2796 — phone, tall</option>
+                  <option value="2160x2700">2160 × 2700 — 4:5 poster</option>
+                </optgroup>
+                <optgroup label="Print at 300 dpi">
+                  <option value="2480x3508">2480 × 3508 — A4</option>
+                  <option value="3508x4961">3508 × 4961 — A3</option>
+                  <option value="5400x3600">5400 × 3600 — 18 × 12 in</option>
+                </optgroup>
+                <option value="custom">Custom…</option>
+              </select>
+              <svg viewBox="0 0 20 20" aria-hidden="true" class="icon select-chevron">
+                <path
+                  d="m6 8 4 4 4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </div>
+            <button
+              class="icon-btn"
+              id="swapOrientation"
+              type="button"
+              title="Swap width and height"
+              aria-label="Swap width and height"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true" class="icon">
+                <path
+                  d="M4 7h9.5M11 4.5 13.5 7 11 9.5M16 13H6.5M9 15.5 6.5 13 9 10.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
           </div>
 
           <div class="custom-size" id="customSize" hidden>
@@ -210,6 +253,54 @@
           <span class="field-label">Finish</span>
           <div class="chip-row" id="filters" role="radiogroup" aria-label="Post-processing"></div>
         </div>
+
+        <!-- More options -->
+        <details class="advanced" id="advanced">
+          <summary>
+            More options
+            <svg viewBox="0 0 20 20" aria-hidden="true" class="icon summary-chevron">
+              <path
+                d="m6 8 4 4 4-4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </summary>
+
+          <div class="field">
+            <span class="field-label">File format</span>
+            <div class="chip-row" id="formats" role="radiogroup" aria-label="File format"></div>
+            <p class="hint" id="formatHint"></p>
+          </div>
+
+          <div class="field" id="qualityField" hidden>
+            <label class="field-label" for="quality">
+              Quality
+              <output class="field-value" id="qualityOut">92</output>
+            </label>
+            <input id="quality" class="slider" type="range" min="50" max="100" step="1" value="92" />
+          </div>
+
+          <div class="field">
+            <span class="field-label">Caption</span>
+            <label class="switch">
+              <input type="checkbox" id="captionToggle" />
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+              <span class="switch-text">Burn place name into the image</span>
+            </label>
+            <input
+              id="captionText"
+              class="text-input"
+              type="text"
+              maxlength="80"
+              placeholder="Caption text"
+              hidden
+            />
+          </div>
+        </details>
 
         <!-- Action -->
         <div class="actions">
