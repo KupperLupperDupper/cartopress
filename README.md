@@ -6,7 +6,7 @@ browser: no backend, no build step, no API keys.
 
 **Live: <https://kupperlupperdupper.github.io/application.cartopress/>**
 
-![The app: a Leaflet preview with the export frame overlaid, and the control
+![Cartopress: a Leaflet preview with the export frame overlaid, and the control
 panel showing the style picker, label switch and resolution presets](docs/screenshot.png)
 
 ## What it does
@@ -25,9 +25,11 @@ panel showing the style picker, label switch and resolution presets](docs/screen
   where the switch is disabled and explains itself.
 - **Pick a resolution** from square, landscape, portrait and 300 dpi print
   presets, or enter a custom size up to 6000 px per side.
-- **Set the coverage** — how many kilometres wide the captured area is, from
-  0.5 km to 50 km. This is the control that makes a larger export actually
-  contain more detail rather than the same picture upscaled.
+- **Set the coverage** — how many kilometres wide the captured area is, from a
+  0.5 km city block to a 5,000 km span that swallows most countries whole. This
+  is the control that makes a larger export actually contain more detail rather
+  than the same picture upscaled. The slider is logarithmic, so half its travel
+  still falls between 0.5 and 50 km where most framing happens.
 - **Export as PNG, JPG, JPEG or WEBP**, with a quality slider for the lossy
   formats, an optional burned-in caption, and six finishes.
 - **Choose where the file goes**, in browsers that support a save dialog for web

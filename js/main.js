@@ -97,7 +97,13 @@ const FORMATS = [
 ];
 
 const MIN_KM = 0.5;
-const MAX_KM = 50;
+/**
+ * Wide enough for a whole country — Brazil and the USA are about 4,500 km
+ * across, so 5,000 covers everything short of Russia end to end. The slider is
+ * logarithmic, which is what keeps a range this broad usable: half its travel
+ * is still spent between 0.5 and 50 km, where most framing happens.
+ */
+const MAX_KM = 5000;
 const SLIDER_MAX = 1000;
 const MAX_CUSTOM_SIDE = 6000;
 const MIN_CUSTOM_SIDE = 64;
@@ -955,8 +961,7 @@ function fitFrame() {
 
 function updateReadouts() {
   const plan = planRender(state);
-  const gsd = plan.outputMetersPerPixel;
-  const gsdText = gsd < 1 ? `${(gsd * 100).toFixed(0)} cm/px` : `${gsd.toFixed(1)} m/px`;
+  const gsdText = formatResolution(plan.outputMetersPerPixel);
 
   el.coverageOut.textContent = `${formatKm(state.coverageKm)} km`;
   el.detailHint.textContent =
@@ -972,6 +977,10 @@ function updateReadouts() {
   if (plan.clamped) {
     el.detailHint.textContent +=
       ` · ${getLayer(state.layerId).label} has no detail past zoom ${plan.layer.maxZoom}`;
+  } else if (plan.tileCount > 600) {
+    // Not slow enough to warn about — a few hundred tiles is seconds — but it
+    // is a lot to ask of a free tile server, which is worth knowing first.
+    el.detailHint.textContent += ' · a heavy ask of a free tile server';
   }
 }
 
@@ -1317,7 +1326,15 @@ function syncControlsFromState() {
 }
 
 function formatKm(km) {
-  return km < 10 ? km.toFixed(1) : km.toFixed(0);
+  if (km < 10) return km.toFixed(1);
+  return Math.round(km).toLocaleString();
+}
+
+/** Ground sample distance, in whichever unit keeps the number readable. */
+function formatResolution(metersPerPixel) {
+  if (metersPerPixel < 1) return `${(metersPerPixel * 100).toFixed(0)} cm/px`;
+  if (metersPerPixel < 1000) return `${metersPerPixel.toFixed(1)} m/px`;
+  return `${(metersPerPixel / 1000).toFixed(2)} km/px`;
 }
 
 function slugify(text) {
