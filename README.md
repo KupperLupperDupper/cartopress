@@ -25,11 +25,14 @@ panel showing the style picker, label switch and resolution presets](docs/screen
   where the switch is disabled and explains itself.
 - **Pick a resolution** from square, landscape, portrait and 300 dpi print
   presets, or enter a custom size up to 6000 px per side.
-- **Set the coverage** — how many kilometres wide the captured area is, from a
-  0.5 km city block to a 5,000 km span that swallows most countries whole. This
-  is the control that makes a larger export actually contain more detail rather
-  than the same picture upscaled. The slider is logarithmic, so half its travel
-  still falls between 0.5 and 50 km where most framing happens.
+- **Set the coverage** — how wide the captured area is on the ground, from a
+  0.5 km city block to a 10,000 km span that takes in any country whole. This is
+  the control that makes a larger export actually contain more detail rather
+  than the same picture upscaled. The slider is logarithmic, so nearly half its
+  travel still falls between 0.5 and 50 km where most framing happens.
+- **Kilometres or miles**, switchable next to the coverage readout and
+  remembered. Ground resolution follows: cm/m/km per pixel, or in/ft/mi. The
+  first visit guesses from your browser's locale.
 - **Export as PNG, JPG, JPEG or WEBP**, with a quality slider for the lossy
   formats, an optional burned-in caption, and six finishes.
 - **Choose where the file goes**, in browsers that support a save dialog for web

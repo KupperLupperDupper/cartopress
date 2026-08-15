@@ -98,12 +98,44 @@ const FORMATS = [
 
 const MIN_KM = 0.5;
 /**
- * Wide enough for a whole country — Brazil and the USA are about 4,500 km
- * across, so 5,000 covers everything short of Russia end to end. The slider is
- * logarithmic, which is what keeps a range this broad usable: half its travel
- * is still spent between 0.5 and 50 km, where most framing happens.
+ * Wide enough for any country, Russia included, and getting on for a quarter of
+ * the globe. The slider is logarithmic, which is what keeps a range this broad
+ * usable: a little under half its travel is still spent between 0.5 and 50 km,
+ * where most framing happens.
  */
-const MAX_KM = 5000;
+const MAX_KM = 10000;
+
+const UNITS_KEY = 'cartopress:units';
+
+/**
+ * Distance units. Everything is computed in metres; these only affect display.
+ * Ground resolution gets its own ladder per system, so the number on screen
+ * stays a readable size from a 13 cm/px city block to a 1.3 km/px continent.
+ */
+const UNITS = {
+  km: {
+    id: 'km',
+    label: 'km',
+    distance: (km) => ({ value: km, suffix: 'km' }),
+    resolution: (m) =>
+      m < 1
+        ? { value: m * 100, digits: 0, suffix: 'cm/px' }
+        : m < 1000
+          ? { value: m, digits: 1, suffix: 'm/px' }
+          : { value: m / 1000, digits: 2, suffix: 'km/px' }
+  },
+  mi: {
+    id: 'mi',
+    label: 'mi',
+    distance: (km) => ({ value: km * 0.621371, suffix: 'mi' }),
+    resolution: (m) =>
+      m < 0.3048
+        ? { value: m * 39.3701, digits: 0, suffix: 'in/px' }
+        : m < 1609.344
+          ? { value: m * 3.28084, digits: 1, suffix: 'ft/px' }
+          : { value: m / 1609.344, digits: 2, suffix: 'mi/px' }
+  }
+};
 const SLIDER_MAX = 1000;
 const MAX_CUSTOM_SIDE = 6000;
 const MIN_CUSTOM_SIDE = 64;
@@ -173,6 +205,7 @@ const el = {
   customH: document.getElementById('customH'),
   coverage: document.getElementById('coverage'),
   coverageOut: document.getElementById('coverageOut'),
+  units: document.getElementById('units'),
   detailHint: document.getElementById('detailHint'),
   filters: document.getElementById('filters'),
   labels: document.getElementById('labels'),
@@ -215,6 +248,7 @@ const state = {
   width: 3840,
   height: 2160,
   coverageKm: 8,
+  units: 'km', // replaced at boot by preferredUnits()
   filter: 'none',
   format: 'png',
   quality: 0.92,
@@ -963,7 +997,7 @@ function updateReadouts() {
   const plan = planRender(state);
   const gsdText = formatResolution(plan.outputMetersPerPixel);
 
-  el.coverageOut.textContent = `${formatKm(state.coverageKm)} km`;
+  el.coverageOut.textContent = formatDistance(state.coverageKm);
   el.detailHint.textContent =
     `${gsdText} in the export · source zoom ${plan.zoom} · ` +
     `${plan.tileCount} tiles` +
@@ -972,7 +1006,7 @@ function updateReadouts() {
   el.placeName.textContent = state.placeName || 'Custom location';
   el.placeMeta.textContent =
     `${state.lat.toFixed(4)}, ${state.lon.toFixed(4)} · ` +
-    `${formatKm(state.coverageKm)} km wide · ${getLayer(state.layerId).label}`;
+    `${formatDistance(state.coverageKm)} wide · ${getLayer(state.layerId).label}`;
 
   if (plan.clamped) {
     el.detailHint.textContent +=
@@ -1325,16 +1359,65 @@ function syncControlsFromState() {
   buildStyleColorRows();
 }
 
-function formatKm(km) {
-  if (km < 10) return km.toFixed(1);
-  return Math.round(km).toLocaleString();
+/** A coverage width in the user's units, e.g. "8.0 km" or "3,107 mi". */
+function formatDistance(km) {
+  const { value, suffix } = UNITS[state.units].distance(km);
+  const text =
+    value < 10 ? value.toFixed(1) : Math.round(value).toLocaleString();
+  return `${text} ${suffix}`;
 }
 
 /** Ground sample distance, in whichever unit keeps the number readable. */
 function formatResolution(metersPerPixel) {
-  if (metersPerPixel < 1) return `${(metersPerPixel * 100).toFixed(0)} cm/px`;
-  if (metersPerPixel < 1000) return `${metersPerPixel.toFixed(1)} m/px`;
-  return `${(metersPerPixel / 1000).toFixed(2)} km/px`;
+  const { value, digits, suffix } = UNITS[state.units].resolution(metersPerPixel);
+  // Past three figures the decimal is noise — "1179 ft/px", not "1178.8".
+  return `${value.toFixed(value >= 100 ? 0 : digits)} ${suffix}`;
+}
+
+function buildUnitToggle() {
+  el.units.innerHTML = '';
+  Object.values(UNITS).forEach((unit) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('role', 'radio');
+    btn.dataset.unit = unit.id;
+    btn.textContent = unit.label;
+    btn.addEventListener('click', () => setUnits(unit.id));
+    el.units.appendChild(btn);
+  });
+  markUnits();
+}
+
+function setUnits(id) {
+  state.units = UNITS[id] ? id : 'km';
+  markUnits();
+  updateReadouts();
+  try {
+    localStorage.setItem(UNITS_KEY, state.units);
+  } catch (err) {
+    /* private mode — the choice just will not persist */
+  }
+}
+
+function markUnits() {
+  [...el.units.children].forEach((btn) =>
+    btn.setAttribute('aria-checked', String(btn.dataset.unit === state.units))
+  );
+}
+
+/**
+ * Default to whatever the browser's locale implies, so an American lands on
+ * miles without hunting for the switch. Explicit choices are remembered.
+ */
+function preferredUnits() {
+  try {
+    const saved = localStorage.getItem(UNITS_KEY);
+    if (saved && UNITS[saved]) return saved;
+  } catch (err) {
+    /* unavailable storage — fall through to the locale guess */
+  }
+  const locale = (navigator.language || 'en').toLowerCase();
+  return /^en-(us|lr)|^my\b/.test(locale) ? 'mi' : 'km';
 }
 
 function slugify(text) {
@@ -1356,6 +1439,8 @@ function clamp(v, lo, hi) {
    ------------------------------------------------------------------ */
 
 const restoredFrom = restoreState();
+state.units = preferredUnits();
+buildUnitToggle();
 buildStyleButtons();
 buildFilterChips();
 buildFormatChips();

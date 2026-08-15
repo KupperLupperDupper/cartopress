@@ -234,10 +234,13 @@
 
         <!-- Coverage -->
         <div class="field">
-          <label class="field-label" for="coverage">
-            Coverage
-            <output class="field-value" id="coverageOut">8.0 km</output>
-          </label>
+          <div class="field-label">
+            <label for="coverage">Coverage</label>
+            <span class="label-right">
+              <output class="field-value" id="coverageOut">8.0 km</output>
+              <span class="unit-toggle" id="units" role="radiogroup" aria-label="Distance units"></span>
+            </span>
+          </div>
           <input
             id="coverage"
             class="slider"

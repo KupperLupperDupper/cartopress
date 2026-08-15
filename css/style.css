@@ -395,6 +395,42 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+.label-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unit-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.unit-toggle button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted-dim);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.unit-toggle button:hover {
+  color: var(--text);
+}
+
+.unit-toggle button[aria-checked='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .hint {
   margin: 0;
   font-size: 11.5px;
