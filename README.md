@@ -1,10 +1,10 @@
-# City From Above
+# Cartopress
 
-Type a city, frame it, and download a high-resolution top-down image of it —
+Type any place, frame it, and download it as a high-resolution map print —
 satellite, neon, line drawing, or eleven other looks. Everything runs in the
 browser: no backend, no build step, no API keys.
 
-**Live: <https://kupperlupperdupper.github.io/city-from-above/>**
+**Live: <https://kupperlupperdupper.github.io/application.cartopress/>**
 
 ![The app: a Leaflet preview with the export frame overlaid, and the control
 panel showing the style picker, label switch and resolution presets](docs/screenshot.png)

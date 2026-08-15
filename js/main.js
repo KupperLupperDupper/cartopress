@@ -59,7 +59,10 @@ const PixelTileLayer = L.TileLayer.extend({
    Constants
    ------------------------------------------------------------------ */
 
-const STORAGE_KEY = 'cityfromabove:last';
+const STORAGE_KEY = 'cartopress:last';
+
+/** Pre-rename key, read once so an existing user keeps their last place. */
+const LEGACY_STORAGE_KEY = 'cityfromabove:last';
 
 /** Shown when a link carries coordinates but no name we can trust. */
 const SHARED_VIEW_NAME = 'Shared view';
@@ -1244,8 +1247,18 @@ function deserialiseStyleColors(encoded) {
 
 function readSaved() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-    if (saved && isFinite(saved.lat) && isFinite(saved.lon)) return saved;
+    const raw =
+      localStorage.getItem(STORAGE_KEY) ||
+      localStorage.getItem(LEGACY_STORAGE_KEY);
+    const saved = JSON.parse(raw || 'null');
+    if (saved && isFinite(saved.lat) && isFinite(saved.lon)) {
+      // Move it under the current key and retire the old one.
+      if (!localStorage.getItem(STORAGE_KEY)) {
+        localStorage.setItem(STORAGE_KEY, raw);
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+      }
+      return saved;
+    }
   } catch (err) {
     /* corrupt or unavailable storage — fall back to the default view */
   }
