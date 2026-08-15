@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>City From Above — download any place as a map poster</title>
+    <meta
+      name="description"
+      content="Type a city, frame it, and download a high-resolution top-down satellite or map image. Runs entirely in your browser."
+    />
+    <meta name="color-scheme" content="dark" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="css/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e1014'/%3E%3Cpath d='M6 20.5 12 9l6 11.5' stroke='%23ff8c42' stroke-width='2.2' fill='none' stroke-linejoin='round'/%3E%3Ccircle cx='22.5' cy='12.5' r='3.5' stroke='%23ff8c42' stroke-width='2.2' fill='none'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1" y="1" width="30" height="30" rx="8" class="mark-bg" />
+          <path
+            d="M6.5 22 13 9.5 19.5 22"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linejoin="round"
+          />
+          <circle
+            cx="23"
+            cy="12"
+            r="3.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          />
+        </svg>
+        <div class="brand-text">
+          <h1>City From Above</h1>
+          <p>High-resolution map exports, straight from your browser</p>
+        </div>
+      </div>
+
+      <button class="ghost-btn" id="surprise" type="button">
+        <svg viewBox="0 0 20 20" aria-hidden="true" class="icon">
+          <path
+            d="M10 2.5v3M10 14.5v3M2.5 10h3M14.5 10h3M4.7 4.7l2.1 2.1M13.2 13.2l2.1 2.1M15.3 4.7l-2.1 2.1M6.8 13.2l-2.1 2.1"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          />
+          <circle cx="10" cy="10" r="2.6" fill="currentColor" />
+        </svg>
+        Surprise me
+      </button>
+    </header>
+
+    <main class="layout">
+      <section class="stage" aria-label="Map preview">
+        <div id="map"></div>
+
+        <div class="frame-layer" aria-hidden="true">
+          <div class="frame" id="frame">
+            <span class="frame-corner tl"></span>
+            <span class="frame-corner tr"></span>
+            <span class="frame-corner bl"></span>
+            <span class="frame-corner br"></span>
+            <span class="frame-badge" id="frameBadge">3840 × 2160</span>
+          </div>
+        </div>
+
+        <div class="stage-hud">
+          <p class="place-name" id="placeName">Drop a pin anywhere on Earth</p>
+          <p class="place-meta" id="placeMeta">
+            Drag the map to reposition the frame
+          </p>
+        </div>
+
+        <button class="fit-btn" id="fitFrame" type="button" title="Fit the preview to the export frame">
+          <svg viewBox="0 0 20 20" aria-hidden="true" class="icon">
+            <path
+              d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          Fit frame
+        </button>
+      </section>
+
+      <aside class="panel" aria-label="Export settings">
+        <!-- Search -->
+        <div class="field">
+          <label class="field-label" for="search">Place</label>
+          <div class="search-wrap">
+            <svg viewBox="0 0 20 20" aria-hidden="true" class="icon search-icon">
+              <circle
+                cx="9"
+                cy="9"
+                r="5.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+              />
+              <path
+                d="m13.2 13.2 3.3 3.3"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+              />
+            </svg>
+            <input
+              id="search"
+              type="text"
+              placeholder="Copenhagen, Kyoto, Cape Town…"
+              autocomplete="off"
+              spellcheck="false"
+              role="combobox"
+              aria-expanded="false"
+              aria-controls="results"
+              aria-autocomplete="list"
+            />
+            <span class="spinner" id="searchSpinner" hidden></span>
+          </div>
+          <ul class="results" id="results" role="listbox" hidden></ul>
+        </div>
+
+        <!-- Style -->
+        <div class="field">
+          <span class="field-label">Style</span>
+          <div class="style-grid" id="styles" role="radiogroup" aria-label="Map style"></div>
+        </div>
+
+        <!-- Resolution -->
+        <div class="field">
+          <label class="field-label" for="resolution">Resolution</label>
+          <div class="select-wrap">
+            <select id="resolution">
+              <option value="1080x1080">1080 × 1080 — square</option>
+              <option value="2048x2048">2048 × 2048 — square, large</option>
+              <option value="1920x1080">1920 × 1080 — HD</option>
+              <option value="2560x1440">2560 × 1440 — QHD</option>
+              <option value="3840x2160" selected>3840 × 2160 — 4K</option>
+              <option value="1080x1920">1080 × 1920 — phone</option>
+              <option value="custom">Custom…</option>
+            </select>
+            <svg viewBox="0 0 20 20" aria-hidden="true" class="icon select-chevron">
+              <path
+                d="m6 8 4 4 4-4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+
+          <div class="custom-size" id="customSize" hidden>
+            <label class="mini">
+              <span>Width</span>
+              <input id="customW" type="number" min="64" max="6000" step="1" value="3000" />
+            </label>
+            <span class="times">×</span>
+            <label class="mini">
+              <span>Height</span>
+              <input id="customH" type="number" min="64" max="6000" step="1" value="2000" />
+            </label>
+          </div>
+        </div>
+
+        <!-- Coverage -->
+        <div class="field">
+          <label class="field-label" for="coverage">
+            Coverage
+            <output class="field-value" id="coverageOut">8.0 km</output>
+          </label>
+          <input
+            id="coverage"
+            class="slider"
+            type="range"
+            min="0"
+            max="1000"
+            step="1"
+            value="600"
+          />
+          <p class="hint" id="detailHint">—</p>
+        </div>
+
+        <!-- Filter -->
+        <div class="field">
+          <span class="field-label">Finish</span>
+          <div class="chip-row" id="filters" role="radiogroup" aria-label="Post-processing"></div>
+        </div>
+
+        <!-- Action -->
+        <div class="actions">
+          <button class="primary-btn" id="generate" type="button">
+            <svg viewBox="0 0 20 20" aria-hidden="true" class="icon">
+              <path
+                d="M10 3v10m0 0 3.5-3.5M10 13 6.5 9.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M3.5 14.5v1.2A1.3 1.3 0 0 0 4.8 17h10.4a1.3 1.3 0 0 0 1.3-1.3v-1.2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span id="generateLabel">Generate &amp; Download</span>
+          </button>
+
+          <div class="progress" id="progress" hidden>
+            <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+            <p class="progress-text" id="progressText">Preparing…</p>
+          </div>
+
+          <p class="status" id="status" role="status" hidden></p>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <p id="footerAttribution">
+        Map data © OpenStreetMap contributors. Imagery © Esri. Basemaps © CARTO
+        and OpenTopoMap. Geocoding by Nominatim.
+      </p>
+    </footer>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
