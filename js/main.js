@@ -153,20 +153,6 @@ const kmToSlider = (km) =>
   );
 
 /* ------------------------------------------------------------------
-   Boot
-   ------------------------------------------------------------------ */
-
-const restoredFrom = restoreState();
-buildStyleButtons();
-buildFilterChips();
-initMap();
-bindControls();
-syncControlsFromState();
-updateEverything();
-// A shared link carries its own zoom; anything else should open already framed.
-if (restoredFrom !== 'hash') fitFrame();
-
-/* ------------------------------------------------------------------
    Map
    ------------------------------------------------------------------ */
 
@@ -782,3 +768,17 @@ function slugify(text) {
 function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
 }
+
+/* ------------------------------------------------------------------
+   Boot — last, so nothing runs before its module bindings exist
+   ------------------------------------------------------------------ */
+
+const restoredFrom = restoreState();
+buildStyleButtons();
+buildFilterChips();
+initMap();
+bindControls();
+syncControlsFromState();
+updateEverything();
+// A shared link carries its own zoom; anything else should open already framed.
+if (restoredFrom !== 'hash') fitFrame();
