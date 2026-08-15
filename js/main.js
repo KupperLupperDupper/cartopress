@@ -359,7 +359,7 @@ function refreshStyleThumbnails() {
 
     if (base.pixelStyle) {
       // Run the thumbnail through the same treatment as the map, so the swatch
-      // shows the chosen neon colour rather than the raw dark basemap.
+      // shows the style's actual colours rather than the raw dark basemap.
       paintPixelStyleSwatch(swatch, url, base);
     } else {
       // The gradient stays behind the tile as a fallback if the request fails.
@@ -375,11 +375,9 @@ function paintPixelStyleSwatch(swatch, url, layer) {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 64;
     canvas.getContext('2d').drawImage(img, 0, 0, 64, 64);
-    if (layer.pixelStyle === 'neon') {
-      applyPixelStyle(canvas, layer.pixelStyle, activeStyleColors(layer.id), {
-        glow: false
-      });
-    }
+    applyPixelStyle(canvas, layer.pixelStyle, activeStyleColors(layer.id), {
+      glow: false
+    });
     try {
       swatch.style.backgroundImage = `url("${canvas.toDataURL()}"), ${layer.swatch}`;
     } catch (err) {

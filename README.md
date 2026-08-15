@@ -6,10 +6,8 @@ browser: no backend, no build step, no API keys.
 
 **Live: <https://kupperlupperdupper.github.io/city-from-above/>**
 
-> **Screenshot placeholder.** Save a capture of the app to `docs/screenshot.png`
-> and uncomment the line below.
->
-> <!-- ![City From Above](docs/screenshot.png) -->
+![The app: a Leaflet preview with the export frame overlaid, and the control
+panel showing the style picker, label switch and resolution presets](docs/screenshot.png)
 
 ## What it does
 
