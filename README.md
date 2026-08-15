@@ -16,8 +16,8 @@ browser: no backend, no build step, no API keys.
 - **Frame it live** on a draggable Leaflet map. An overlay rectangle shows
   exactly the ground area that will be exported, at the aspect ratio of the
   chosen resolution.
-- **12 styles** grouped as Imagery, Cartographic and Terrain — including
-  a Neon treatment of the CARTO dark basemap.
+- **14 styles** grouped as Imagery, Cartographic, Drawn and Terrain — including
+  Neon, Line drawing and Blueprint, whose colours you choose yourself.
 - **Turn road names and labels off.** Three different mechanisms sit behind one
   switch: CARTO's label-free tile variants, Esri's separate reference overlays
   (which is also what gives satellite a proper hybrid), and layers such as
@@ -30,6 +30,26 @@ browser: no backend, no build step, no API keys.
   contain more detail rather than the same picture upscaled.
 - **Export as PNG, JPG, JPEG or WEBP**, with a quality slider for the lossy
   formats, an optional burned-in caption, and six finishes.
+- **Choose where the file goes**, in browsers that support a save dialog for web
+  pages; elsewhere it lands in the downloads folder.
+
+## The drawn styles
+
+Neon, Line drawing and Blueprint are not extra tile servers. They are produced
+by remapping a basemap's luminance in `js/render.js`.
+
+Posters in this style are usually made by rendering OpenStreetMap *vector* data
+— prettymaps, QGIS, or a Mapbox Studio style — which needs either a toolchain or
+an API key, and neither fits a keyless static page. But a dark raster basemap
+already encodes the road network as the bright part of a very narrow luminance
+band: the background sits around 9/255 and even wide arterials only reach about
+42/255. Normalising that band to 0..1 and looking it up in a gradient gets to
+the same place with nothing but a canvas — ink on paper for Line drawing, glow
+on black for Neon.
+
+The colour you pick is used exactly, held across the whole span of the ramp
+where the street network actually lands, so the map comes out in your colour
+rather than a brighter or darker relative of it.
 
 ## How the export works
 
@@ -88,15 +108,15 @@ js/render.js      offscreen tile stitcher (the export renderer)
 
 ## URL state
 
-The hash carries `#lat,lon,zoom,style,resolution,coverage,labels`, so any view
-is a shareable link and survives a reload. The last search is also kept in
-`localStorage`.
+The hash carries `#lat,lon,zoom,style,resolution,coverage,labels,colours`, so
+any view is a shareable link and survives a reload. The last search is also kept
+in `localStorage`.
 
 ## Attribution and licensing
 
-The exported image has the relevant credit burned into its corner. That is a
-licensing requirement of every provider below, not decoration — please leave it
-in place when you share an export.
+The exported image has the relevant credit burned into its corner by default.
+Every provider below asks to be credited, so if you switch that off under **More
+options**, the credit becomes yours to add wherever you publish the image.
 
 - **Esri World Imagery** — imagery © Esri, Maxar, Earthstar Geographics.
   Used via the public ArcGIS Online tile services.

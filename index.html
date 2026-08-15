@@ -154,6 +154,8 @@
             <span class="switch-text">Road names and labels</span>
           </label>
           <p class="hint" id="labelsHint" hidden></p>
+
+          <div class="style-colours" id="styleColours" hidden></div>
         </div>
 
         <!-- Resolution -->
@@ -282,6 +284,29 @@
               <output class="field-value" id="qualityOut">92</output>
             </label>
             <input id="quality" class="slider" type="range" min="50" max="100" step="1" value="92" />
+          </div>
+
+          <div class="field">
+            <span class="field-label">Saving</span>
+            <label class="switch" id="pickLocationSwitch">
+              <input type="checkbox" id="pickLocation" />
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+              <span class="switch-text">Choose where to save each file</span>
+            </label>
+            <p class="hint" id="saveHint"></p>
+          </div>
+
+          <div class="field">
+            <span class="field-label">Attribution</span>
+            <label class="switch">
+              <input type="checkbox" id="attributionToggle" checked />
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+              <span class="switch-text">Burn the source credit into the image</span>
+            </label>
+            <p class="hint">
+              Every tile provider here asks to be credited. With this off, the
+              credit is yours to add wherever you publish the image.
+            </p>
           </div>
 
           <div class="field">

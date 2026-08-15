@@ -20,8 +20,40 @@ import {
   planRender,
   renderExport,
   canvasToBlob,
+  applyPixelStyle,
+  PIXEL_STYLES,
+  defaultStyleColors,
   TaintedCanvasError
 } from './render.js';
+
+/**
+ * A tile layer that draws each tile into a canvas and runs the layer's pixel
+ * treatment over it, so styles like Neon and Line drawing preview through
+ * exactly the same code the exporter uses. Bloom is left to the exporter —
+ * blurring per tile would show seams at the tile boundaries.
+ */
+const PixelTileLayer = L.TileLayer.extend({
+  createTile(coords, done) {
+    const size = this.getTileSize().x;
+    const tile = document.createElement('canvas');
+    tile.width = size;
+    tile.height = size;
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      tile.getContext('2d').drawImage(img, 0, 0, size, size);
+      applyPixelStyle(tile, this.options.pixelStyle, this.options.styleColors, {
+        glow: false
+      });
+      done(null, tile);
+    };
+    img.onerror = (err) => done(err, tile);
+    img.src = this.getTileUrl(coords);
+
+    return tile;
+  }
+});
 
 /* ------------------------------------------------------------------
    Constants
@@ -137,6 +169,7 @@ const el = {
   labels: document.getElementById('labels'),
   labelsSwitch: document.getElementById('labelsSwitch'),
   labelsHint: document.getElementById('labelsHint'),
+  styleColours: document.getElementById('styleColours'),
   swapOrientation: document.getElementById('swapOrientation'),
   formats: document.getElementById('formats'),
   formatHint: document.getElementById('formatHint'),
@@ -145,6 +178,10 @@ const el = {
   qualityOut: document.getElementById('qualityOut'),
   captionToggle: document.getElementById('captionToggle'),
   captionText: document.getElementById('captionText'),
+  attributionToggle: document.getElementById('attributionToggle'),
+  pickLocation: document.getElementById('pickLocation'),
+  pickLocationSwitch: document.getElementById('pickLocationSwitch'),
+  saveHint: document.getElementById('saveHint'),
   generate: document.getElementById('generate'),
   generateLabel: document.getElementById('generateLabel'),
   progress: document.getElementById('progress'),
@@ -173,8 +210,14 @@ const state = {
   format: 'png',
   quality: 0.92,
   caption: false,
-  captionText: ''
+  captionText: '',
+  attribution: true,
+  pickLocation: false,
+  styleColors: {} // per layer id, only for layers with a pixel style
 };
+
+/** Only Chromium browsers can offer a real save dialog to a static page. */
+const CAN_PICK_LOCATION = typeof window.showSaveFilePicker === 'function';
 
 let map;
 let tileLayer;
@@ -242,20 +285,20 @@ function applyTileLayer() {
     crossOrigin: 'anonymous'
   };
 
-  tileLayer = L.tileLayer(layer.url, {
-    ...common,
-    attribution: layer.leafletAttribution
-  }).addTo(map);
+  const baseOptions = { ...common, attribution: layer.leafletAttribution };
+  tileLayer = layer.pixelStyle
+    ? new PixelTileLayer(layer.url, {
+        ...baseOptions,
+        pixelStyle: layer.pixelStyle,
+        styleColors: activeStyleColors()
+      })
+    : L.tileLayer(layer.url, baseOptions);
+  tileLayer.addTo(map);
 
   // Label overlays sit on top of the basemap in the same pane.
   overlayLayers = layer.overlays.map((url, i) =>
     L.tileLayer(url, { ...common, zIndex: 10 + i }).addTo(map)
   );
-
-  // Styles like Neon are a filter chain over a plain basemap. Applying it to
-  // the tile pane keeps the preview honest about what will be exported.
-  const pane = map.getPane('tilePane');
-  if (pane) pane.style.filter = layer.filterCss || '';
 
   el.footerAttribution.textContent =
     `${layer.attribution} · Geocoding by Nominatim / OpenStreetMap.`;
@@ -308,12 +351,45 @@ function refreshStyleThumbnails() {
     const url = buildTileUrl(layer.url, x, y, zoom, layer.subdomains);
 
     const swatch = btn.querySelector('.style-swatch');
-    swatch.style.filter = base.filterCss || '';
-    if (swatch.dataset.url === url) return;
-    swatch.dataset.url = url;
-    // The gradient stays behind the tile as a fallback if the request fails.
-    swatch.style.backgroundImage = `url("${url}"), ${base.swatch}`;
+    const key = base.pixelStyle
+      ? `${url}|${JSON.stringify(activeStyleColors(base.id))}`
+      : url;
+    if (swatch.dataset.key === key) return;
+    swatch.dataset.key = key;
+
+    if (base.pixelStyle) {
+      // Run the thumbnail through the same treatment as the map, so the swatch
+      // shows the chosen neon colour rather than the raw dark basemap.
+      paintPixelStyleSwatch(swatch, url, base);
+    } else {
+      // The gradient stays behind the tile as a fallback if the request fails.
+      swatch.style.backgroundImage = `url("${url}"), ${base.swatch}`;
+    }
   });
+}
+
+function paintPixelStyleSwatch(swatch, url, layer) {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    canvas.getContext('2d').drawImage(img, 0, 0, 64, 64);
+    if (layer.pixelStyle === 'neon') {
+      applyPixelStyle(canvas, layer.pixelStyle, activeStyleColors(layer.id), {
+        glow: false
+      });
+    }
+    try {
+      swatch.style.backgroundImage = `url("${canvas.toDataURL()}"), ${layer.swatch}`;
+    } catch (err) {
+      swatch.style.backgroundImage = layer.swatch;
+    }
+  };
+  img.onerror = () => {
+    swatch.style.backgroundImage = layer.swatch;
+  };
+  img.src = url;
 }
 
 /** Debounced so a long pan does not fire a dozen thumbnail requests per style. */
@@ -321,6 +397,122 @@ let thumbTimer = null;
 function scheduleThumbnailRefresh() {
   clearTimeout(thumbTimer);
   thumbTimer = setTimeout(refreshStyleThumbnails, 700);
+}
+
+/**
+ * The colours in play for the current style: the style's own defaults, then the
+ * layer's overrides (Blueprint is the ink style in different colours), then
+ * whatever the user has picked for that layer.
+ */
+function activeStyleColors(layerId = state.layerId) {
+  const layer = getLayer(layerId);
+  if (!layer.pixelStyle) return {};
+  return {
+    ...defaultStyleColors(layer.pixelStyle),
+    ...(layer.pixelColors || {}),
+    ...(state.styleColors[layerId] || {})
+  };
+}
+
+/** Build one labelled row of preset dots plus a colour input per colour slot. */
+function buildStyleColorRows() {
+  const layer = getLayer(state.layerId);
+  el.styleColours.hidden = !layer.pixelStyle;
+  el.styleColours.innerHTML = '';
+  if (!layer.pixelStyle) return;
+
+  const style = PIXEL_STYLES[layer.pixelStyle];
+  const current = activeStyleColors();
+
+  style.colors.forEach((slot) => {
+    const row = document.createElement('div');
+    row.className = 'colour-slot';
+
+    const label = document.createElement('span');
+    label.className = 'field-label';
+    label.textContent = `${slot.label} colour`;
+
+    const dots = document.createElement('div');
+    dots.className = 'swatch-row';
+    dots.setAttribute('role', 'radiogroup');
+    dots.setAttribute('aria-label', `${slot.label} colour`);
+
+    // A layer's own default belongs in its preset row even if the style's
+    // generic list does not mention it — Blueprint's navy, for instance.
+    const presets = [...new Set([
+      ...(layer.pixelColors && layer.pixelColors[slot.key]
+        ? [layer.pixelColors[slot.key]]
+        : []),
+      ...slot.presets
+    ])];
+
+    presets.forEach((color) => {
+      const dot = document.createElement('button');
+      dot.type = 'button';
+      dot.className = 'colour-dot';
+      dot.setAttribute('role', 'radio');
+      dot.setAttribute('aria-label', color);
+      dot.dataset.colour = color;
+      dot.dataset.slot = slot.key;
+      dot.title = color;
+      // `color` drives the CSS glow, `background` the dot itself.
+      dot.style.color = color;
+      dot.style.background = color;
+      dot.addEventListener('click', () => setStyleColor(slot.key, color));
+      dots.appendChild(dot);
+    });
+
+    const custom = document.createElement('label');
+    custom.className = 'colour-custom';
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = current[slot.key];
+    input.dataset.slot = slot.key;
+    input.addEventListener('input', () => setStyleColor(slot.key, input.value));
+    const text = document.createElement('span');
+    text.textContent = 'Custom';
+    custom.append(input, text);
+
+    row.append(label, dots, custom);
+    el.styleColours.appendChild(row);
+  });
+
+  markActiveColors();
+}
+
+function markActiveColors() {
+  const current = activeStyleColors();
+  el.styleColours.querySelectorAll('.colour-dot').forEach((dot) => {
+    const active =
+      (current[dot.dataset.slot] || '').toLowerCase() ===
+      dot.dataset.colour.toLowerCase();
+    dot.setAttribute('aria-checked', String(active));
+  });
+  el.styleColours.querySelectorAll('input[type="color"]').forEach((input) => {
+    const value = current[input.dataset.slot];
+    if (value && input.value.toLowerCase() !== value.toLowerCase()) {
+      input.value = value;
+    }
+  });
+}
+
+let colourRepaintTimer = null;
+
+function setStyleColor(slotKey, color) {
+  const existing = state.styleColors[state.layerId] || {};
+  state.styleColors[state.layerId] = { ...existing, [slotKey]: color };
+  markActiveColors();
+
+  // Dragging a colour input fires continuously, and each repaint rebuilds every
+  // tile — so reflect the choice at once but coalesce the actual work.
+  clearTimeout(colourRepaintTimer);
+  colourRepaintTimer = setTimeout(() => {
+    // Tiles are cached with their colours already baked in, so the preview
+    // layer has to be rebuilt rather than merely redrawn.
+    applyTileLayer();
+    refreshStyleThumbnails();
+    writeHash();
+  }, 120);
 }
 
 function buildFormatChips() {
@@ -395,6 +587,7 @@ function selectLayer(id) {
   );
 
   updateLabelSwitch();
+  buildStyleColorRows();
   applyTileLayer();
 
   // Several layers top out below 19; keep the preview inside the range.
@@ -557,6 +750,21 @@ function bindControls() {
 
   el.captionText.addEventListener('input', () => {
     state.captionText = el.captionText.value;
+  });
+
+  el.attributionToggle.addEventListener('change', () => {
+    state.attribution = el.attributionToggle.checked;
+  });
+
+  el.pickLocation.disabled = !CAN_PICK_LOCATION;
+  el.pickLocationSwitch.classList.toggle('is-disabled', !CAN_PICK_LOCATION);
+  el.saveHint.textContent = CAN_PICK_LOCATION
+    ? 'A save dialog opens before the render starts.'
+    : 'This browser has no save dialog for web pages — files go to your ' +
+      'downloads folder.';
+
+  el.pickLocation.addEventListener('change', () => {
+    state.pickLocation = el.pickLocation.checked;
   });
 
   // --- Buttons ----------------------------------------------------
@@ -778,8 +986,34 @@ function updateEverything() {
 
 async function generate() {
   if (rendering) return;
-  rendering = true;
 
+  const format = FORMATS.find((f) => f.id === state.format) || FORMATS[0];
+  const filename = buildFilename(format);
+
+  // Ask where to save *first*: showSaveFilePicker needs the click's transient
+  // activation, which a minute of tile fetching would have long since spent.
+  let fileHandle = null;
+  if (state.pickLocation && CAN_PICK_LOCATION) {
+    try {
+      fileHandle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [
+          {
+            description: `${format.label} image`,
+            accept: { [format.mime]: [`.${format.ext}`] }
+          }
+        ]
+      });
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        setStatus('Save cancelled — nothing was rendered.');
+        return;
+      }
+      throw err;
+    }
+  }
+
+  rendering = true;
   el.generate.disabled = true;
   el.generateLabel.textContent = 'Rendering…';
   el.progress.hidden = false;
@@ -796,6 +1030,8 @@ async function generate() {
       height: state.height,
       coverageKm: state.coverageKm,
       filter: state.filter,
+      attribution: state.attribution,
+      styleColors: activeStyleColors(),
       caption: state.caption ? state.captionText || defaultCaption() : null,
       onProgress: ({ loaded, total, phase }) => {
         if (phase === 'compose') {
@@ -806,21 +1042,31 @@ async function generate() {
       }
     });
 
-    const format = FORMATS.find((f) => f.id === state.format) || FORMATS[0];
     setProgress(1, `Encoding ${format.label}…`);
     const blob = await canvasToBlob(
       canvas,
       format.mime,
       format.lossy ? state.quality : undefined
     );
-    downloadBlob(blob, buildFilename(format));
+
+    let where = 'Downloaded';
+    if (fileHandle) {
+      setProgress(1, 'Writing file…');
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      where = `Saved to ${fileHandle.name}`;
+    } else {
+      downloadBlob(blob, filename);
+    }
 
     const size = (blob.size / 1024 / 1024).toFixed(1);
     const note = failedTiles
       ? ` ${failedTiles} tile${failedTiles === 1 ? '' : 's'} could not be loaded and were left blank.`
       : '';
     setStatus(
-      `Saved ${state.width} × ${state.height} from ${plan.tileCount} tiles at zoom ${plan.zoom} (${size} MB).${note}`,
+      `${where}: ${state.width} × ${state.height} from ${plan.tileCount} tiles ` +
+        `at zoom ${plan.zoom} (${size} MB).${note}`,
       failedTiles ? 'error' : 'ok'
     );
   } catch (err) {
@@ -903,7 +1149,8 @@ function writeHashNow() {
     `#${state.lat.toFixed(5)},${state.lon.toFixed(5)},` +
     `${Number(state.zoom).toFixed(2)},${state.layerId},` +
     `${state.width}x${state.height},${state.coverageKm.toFixed(2)},` +
-    `${state.labels ? 'labels' : 'nolabels'}`;
+    `${state.labels ? 'labels' : 'nolabels'},` +
+    `${serialiseStyleColors()}`;
   if (hash === location.hash) return;
   suppressHashUpdate = true;
   history.replaceState(null, '', hash);
@@ -916,7 +1163,8 @@ function readHash() {
   const raw = location.hash.replace(/^#/, '');
   if (!raw) return false;
 
-  const [lat, lon, zoom, style, resolution, coverage, labels] = raw.split(',');
+  const [lat, lon, zoom, style, resolution, coverage, labels, colours] =
+    raw.split(',');
   const latN = parseFloat(lat);
   const lonN = parseFloat(lon);
   if (!isFinite(latN) || !isFinite(lonN)) return false;
@@ -936,6 +1184,7 @@ function readHash() {
   if (isFinite(cov)) state.coverageKm = clamp(cov, MIN_KM, MAX_KM);
 
   if (labels) state.labels = labels === 'labels';
+  if (colours) deserialiseStyleColors(colours);
 
   state.placeName = SHARED_VIEW_NAME;
   return true;
@@ -968,6 +1217,31 @@ function restoreState() {
     return 'storage';
   }
   return null;
+}
+
+/** The active style's colours as bare hex joined by dashes, or "-" if none. */
+function serialiseStyleColors() {
+  const layer = getLayer(state.layerId);
+  if (!layer.pixelStyle) return '-';
+  const colors = activeStyleColors();
+  return PIXEL_STYLES[layer.pixelStyle].colors
+    .map((slot) => (colors[slot.key] || '').replace('#', ''))
+    .join('-');
+}
+
+function deserialiseStyleColors(encoded) {
+  const layer = getLayer(state.layerId);
+  if (!layer.pixelStyle || encoded === '-') return;
+
+  const parts = encoded.split('-');
+  const slots = PIXEL_STYLES[layer.pixelStyle].colors;
+  const picked = {};
+  slots.forEach((slot, i) => {
+    if (parts[i] && /^[0-9a-f]{6}$/i.test(parts[i])) {
+      picked[slot.key] = `#${parts[i].toLowerCase()}`;
+    }
+  });
+  if (Object.keys(picked).length) state.styleColors[state.layerId] = picked;
 }
 
 function readSaved() {
@@ -1017,6 +1291,8 @@ function syncControlsFromState() {
   el.qualityOut.textContent = el.quality.value;
   el.captionToggle.checked = state.caption;
   el.captionText.hidden = !state.caption;
+  el.attributionToggle.checked = state.attribution;
+  el.pickLocation.checked = state.pickLocation && CAN_PICK_LOCATION;
 
   [...el.styles.querySelectorAll('.style-btn')].forEach((c) =>
     c.setAttribute('aria-checked', String(c.dataset.layer === state.layerId))
@@ -1026,6 +1302,7 @@ function syncControlsFromState() {
   );
 
   updateLabelSwitch();
+  buildStyleColorRows();
 }
 
 function formatKm(km) {

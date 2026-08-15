@@ -125,6 +125,8 @@ export async function renderExport(options) {
     height,
     filter = 'none',
     caption = null,
+    attribution = true,
+    styleColors = {},
     onProgress = () => {},
     signal
   } = options;
@@ -207,8 +209,16 @@ export async function renderExport(options) {
   }
 
   onProgress({ loaded: tileCount, total: tileCount, phase: 'compose' });
-  const canvas = downscale(stage, width, height, filter, layer.filterCss);
-  drawCredits(canvas, layer.attribution, caption);
+  const canvas = downscale(stage, width, height, filter);
+  if (layer.pixelStyle) {
+    // The layer's own palette sits between the style defaults and the caller's
+    // overrides — Blueprint is the ink style with a different default palette.
+    applyPixelStyle(canvas, layer.pixelStyle, {
+      ...(layer.pixelColors || {}),
+      ...styleColors
+    });
+  }
+  drawCredits(canvas, attribution ? layer.attribution : null, caption);
 
   return { canvas, plan, failedTiles };
 }
@@ -261,7 +271,7 @@ async function runPool(items, limit, worker) {
 /* Compositing                                                         */
 /* ------------------------------------------------------------------ */
 
-function downscale(source, targetWidth, targetHeight, filter, layerFilter) {
+function downscale(source, targetWidth, targetHeight, filter) {
   let current = source;
 
   // Halve in steps when the reduction is large — a single big downscale loses
@@ -288,8 +298,7 @@ function downscale(source, targetWidth, targetHeight, filter, layerFilter) {
   octx.imageSmoothingEnabled = true;
   octx.imageSmoothingQuality = 'high';
 
-  // A layer may carry its own look (Neon), which the chosen finish stacks onto.
-  const cssFilter = [layerFilter, filterString(filter)].filter(Boolean).join(' ');
+  const cssFilter = filterString(filter);
   if (cssFilter) octx.filter = cssFilter;
   octx.drawImage(current, 0, 0, targetWidth, targetHeight);
   octx.filter = 'none';
@@ -320,6 +329,308 @@ function filterString(filter) {
       return 'grayscale(1) contrast(1.06)';
     default:
       return '';
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Neon                                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * These are luminance ramps, not filter chains.
+ *
+ * The dark basemap is only about 40 levels of grey deep, so pushing it around
+ * with brightness/contrast crushes it into flat, banded colour. Instead,
+ * normalise that narrow band to 0..1 and look the result up in a real gradient.
+ * The same maths runs in the preview and in the export.
+ *
+ * Pixel styles: looks built by remapping the basemap's luminance rather than
+ * by fetching differently-styled tiles. Each declares the colours it exposes to
+ * the user and how to turn them into ramp stops.
+ *
+ * This is how the "line drawing" look is possible without a backend. The people
+ * making those posters generally render OpenStreetMap *vector* data — prettymaps,
+ * QGIS, or a Mapbox Studio style — which needs either a toolchain or an API key.
+ * A dark raster basemap already encodes the road network as the bright part of a
+ * very narrow luminance band, so mapping that band onto ink-on-paper gets to the
+ * same place with nothing but a canvas.
+ */
+export const PIXEL_STYLES = {
+  neon: {
+    id: 'neon',
+    glow: true,
+    gamma: 0.7,
+    // Where the ramp reaches the picked colour and holds it — see neonStops.
+    exactFrom: 0.32,
+    colors: [
+      {
+        key: 'glow',
+        label: 'Glow',
+        fallback: '#28baff',
+        presets: ['#28baff', '#ff3ad0', '#4dff9b', '#ffa32e', '#bfe9ff', '#ff3b3b']
+      }
+    ],
+    stops: (colors) => neonStops(colors.glow)
+  },
+
+  ink: {
+    id: 'ink',
+    glow: false,
+    gamma: 0.85,
+    colors: [
+      {
+        key: 'ink',
+        label: 'Line',
+        fallback: '#1b2430',
+        presets: ['#1b2430', '#2f4a7a', '#7a2b2b', '#2b5f4a', '#000000', '#e8eef7']
+      },
+      {
+        key: 'paper',
+        label: 'Paper',
+        fallback: '#f3ecdf',
+        presets: ['#f3ecdf', '#ffffff', '#efe6d2', '#0d2b4f', '#101418', '#f7e9e3']
+      }
+    ],
+    stops: (colors) => inkStops(colors.ink, colors.paper)
+  }
+};
+
+/** Default colour set for a pixel style, as `{ key: hex }`. */
+export function defaultStyleColors(styleId) {
+  const style = PIXEL_STYLES[styleId];
+  if (!style) return {};
+  return style.colors.reduce((acc, slot) => {
+    acc[slot.key] = slot.fallback;
+    return acc;
+  }, {});
+}
+
+/**
+ * Black and white point of the source basemap, in 0..1 luminance.
+ *
+ * Measured rather than guessed: across CARTO dark tiles from dense city to open
+ * country, the background sits around 9/255 and even the widest arterials only
+ * reach about 42/255. The whole picture lives in a sliver at the bottom of the
+ * range, which is exactly why naive brightness/contrast cannot rescue it.
+ * These are fixed rather than auto-levelled per tile, so neighbouring tiles
+ * cannot disagree about where black is and show a seam.
+ */
+const NEON_FLOOR = 0.032;
+const NEON_CEIL = 0.17;
+
+/**
+ * Build the ramp stops from a single chosen colour.
+ *
+ * The chosen colour is used *exactly*, across the whole middle of the ramp —
+ * which is where a street network actually lands, so the map reads as the
+ * colour that was picked rather than a relative of it. Hue and saturation are
+ * never altered; only lightness moves, down towards black for the background
+ * and up towards white for the few brightest arterials.
+ *
+ * Earlier versions drifted the hue and clamped saturation to a floor, which is
+ * how a lime pick came out blue and a muted pick came out neon.
+ */
+function neonStops(color) {
+  const rgb = hexToRgb(color);
+  const [h, s, l] = rgbToHsl(rgb);
+
+  // Keep the ends usable even for a very dark or very pale pick, without
+  // touching the colour itself in the band that dominates the image.
+  const floor = Math.max(0.03, l * 0.1);
+  const low = Math.max(0.1, l * 0.42);
+  const peak = Math.min(0.95, Math.max(l * 1.5, l + 0.22));
+
+  // The plateau covers everything from "faint side street" upwards, so the road
+  // network renders at the picked colour itself rather than at some brighter or
+  // darker relative of it. Only the background falls away below it, and only
+  // the very brightest arterials lift above.
+  return [
+    { t: 0.0, c: hslToRgb(h, s, floor) },
+    { t: 0.16, c: hslToRgb(h, s, low) },
+    { t: 0.32, c: rgb }, // exactly the picked colour ...
+    { t: 0.94, c: rgb }, // ... held across the whole street network
+    { t: 1.0, c: hslToRgb(h, s * 0.6, peak) }
+  ];
+}
+
+/**
+ * Ink on paper: paper below the line threshold, the line colour above it, with
+ * a short blend between so antialiased streets do not turn into jagged stencil
+ * edges. Water sits just above the land background in the source, so it comes
+ * through as a pale wash rather than disappearing.
+ */
+function inkStops(ink, paper) {
+  const inkRgb = hexToRgb(ink);
+  const paperRgb = hexToRgb(paper);
+  return [
+    { t: 0.0, c: paperRgb },
+    { t: 0.14, c: paperRgb },
+    { t: 0.55, c: inkRgb },
+    { t: 1.0, c: inkRgb }
+  ];
+}
+
+/** 256-entry lookup tables, cached per style+colour — then pure lookups. */
+const rampCache = new Map();
+
+function rampFor(styleId, colors) {
+  const style = PIXEL_STYLES[styleId];
+  if (!style) return null;
+
+  const key = `${styleId}:${style.colors.map((c) => colors[c.key]).join(',')}`;
+  const cached = rampCache.get(key);
+  if (cached) return cached;
+
+  const stops = style.stops(colors);
+  const table = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = Math.pow(i / 255, style.gamma); // lift the midtones off the floor
+    let a = stops[0];
+    let b = stops[stops.length - 1];
+    for (let s = 0; s < stops.length - 1; s++) {
+      if (t >= stops[s].t && t <= stops[s + 1].t) {
+        a = stops[s];
+        b = stops[s + 1];
+        break;
+      }
+    }
+    const span = b.t - a.t || 1;
+    const k = (t - a.t) / span;
+    table[i * 3] = a.c[0] + (b.c[0] - a.c[0]) * k;
+    table[i * 3 + 1] = a.c[1] + (b.c[1] - a.c[1]) * k;
+    table[i * 3 + 2] = a.c[2] + (b.c[2] - a.c[2]) * k;
+  }
+
+  rampCache.set(key, table);
+  return table;
+}
+
+/* --- small colour helpers ---------------------------------------- */
+
+function hexToRgb(hex) {
+  const clean = String(hex).replace('#', '');
+  const full =
+    clean.length === 3
+      ? clean
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : clean;
+  const n = parseInt(full, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgbToHsl([r, g, b]) {
+  const rr = r / 255;
+  const gg = g / 255;
+  const bb = b / 255;
+  const max = Math.max(rr, gg, bb);
+  const min = Math.min(rr, gg, bb);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === rr) h = (gg - bb) / d + (gg < bb ? 6 : 0);
+  else if (max === gg) h = (bb - rr) / d + 2;
+  else h = (rr - gg) / d + 4;
+  return [h * 60, s, l];
+}
+
+function hslToRgb(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = ((h % 360) + 360) / 60 % 6;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  const m = l - c / 2;
+  const t = hp < 1 ? [c, x, 0]
+    : hp < 2 ? [x, c, 0]
+    : hp < 3 ? [0, c, x]
+    : hp < 4 ? [0, x, c]
+    : hp < 5 ? [x, 0, c]
+    : [c, 0, x];
+  return t.map((v) => Math.round((v + m) * 255));
+}
+
+/**
+ * Remap one canvas in place. Used on whole exports and on single preview tiles,
+ * which is why it has to cope with a canvas of any size. Pass `glow: false` for
+ * per-tile work — a blur applied tile by tile shows seams at the boundaries.
+ */
+export function applyPixelStyle(canvas, styleId, colors, options = {}) {
+  const style = PIXEL_STYLES[styleId];
+  if (!style) return;
+
+  const palette = { ...defaultStyleColors(styleId), ...colors };
+  const ramp = rampFor(styleId, palette);
+  const glow = options.glow !== false && style.glow;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let image;
+  try {
+    image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  } catch (err) {
+    return; // tainted; the export path reports this properly later
+  }
+
+  const px = image.data;
+  const scale = 255 / (NEON_CEIL - NEON_FLOOR);
+  // Keep each pixel's ramp position so the bloom below can be undone on the
+  // road network itself.
+  const levels = glow ? new Uint8Array(px.length / 4) : null;
+
+  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
+    // Rec. 601 luma is close enough and much cheaper than a colour-managed one.
+    const lum = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) / 255;
+    let t = (lum - NEON_FLOOR) * scale;
+    t = t < 0 ? 0 : t > 255 ? 255 : t;
+    const level = t | 0;
+    if (levels) levels[p] = level;
+    const idx = level * 3;
+    px[i] = ramp[idx];
+    px[i + 1] = ramp[idx + 1];
+    px[i + 2] = ramp[idx + 2];
+  }
+  ctx.putImageData(image, 0, 0);
+
+  if (!glow) return;
+
+  // Bloom: a blurred copy added back with 'lighter'. Done at a third scale —
+  // it is a glow, nobody can tell, and it keeps 4K renders quick.
+  const gw = Math.max(1, Math.round(canvas.width / 3));
+  const gh = Math.max(1, Math.round(canvas.height / 3));
+  const glowCanvas = document.createElement('canvas');
+  glowCanvas.width = gw;
+  glowCanvas.height = gh;
+  const gctx = glowCanvas.getContext('2d');
+  gctx.filter = `blur(${Math.max(1, Math.round(gh * 0.006))}px)`;
+  gctx.drawImage(canvas, 0, 0, gw, gh);
+
+  // Kept gentle: 'lighter' is additive, so a strong bloom would drag every lit
+  // pixel towards white and away from the colour that was actually chosen.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = 0.2;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(glowCanvas, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+
+  // The bloom has just added light to the network as well as around it, which
+  // would leave the roads a paler relative of the chosen colour. Paint the
+  // ramp back over everything at or above the plateau: the halo survives in the
+  // gaps, the lines themselves come out at exactly the colour that was picked.
+  const exactFrom = Math.round((style.exactFrom || 1) * 255);
+  if (exactFrom <= 255) {
+    const after = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const out = after.data;
+    for (let i = 0, p = 0; i < out.length; i += 4, p++) {
+      const level = levels[p];
+      if (level < exactFrom) continue;
+      const idx = level * 3;
+      out[i] = ramp[idx];
+      out[i + 1] = ramp[idx + 1];
+      out[i + 2] = ramp[idx + 2];
+    }
+    ctx.putImageData(after, 0, 0);
   }
 }
 
@@ -359,12 +670,14 @@ function drawCredits(canvas, attribution, caption) {
   const fontSize = clamp(Math.round(h * 0.016), 11, 40);
   const margin = clamp(Math.round(Math.min(w, h) * 0.02), 8, 48);
 
-  drawPill(ctx, attribution, {
-    fontSize,
-    align: 'right',
-    x: w - margin,
-    y: h - margin
-  });
+  if (attribution) {
+    drawPill(ctx, attribution, {
+      fontSize,
+      align: 'right',
+      x: w - margin,
+      y: h - margin
+    });
+  }
 
   if (caption) {
     drawPill(ctx, caption, {

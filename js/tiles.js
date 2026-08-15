@@ -94,16 +94,45 @@ export const LAYERS = {
     id: 'neon',
     label: 'Neon',
     group: 'Cartographic',
-    // The dark basemap put through a filter chain that turns its road network
-    // into electric cyan on near-black. `filterCss` is valid both as a CSS
-    // filter (preview) and as a canvas ctx.filter (export), so the two match.
+    // The dark basemap with its road network remapped through a neon ramp.
+    // `pixelStyle` is applied by render.js to the export and by the preview's
+    // canvas tile layer, so both go through exactly the same code.
     url: `${CARTO}/dark_all/{z}/{x}/{y}{r}.png`,
     noLabelsUrl: `${CARTO}/dark_nolabels/{z}/{x}/{y}{r}.png`,
-    filterCss:
-      'grayscale(1) brightness(2.6) contrast(1.9) sepia(1) hue-rotate(165deg) saturate(8)',
+    pixelStyle: 'neon',
     maxZoom: 20,
     subdomains: ['a', 'b', 'c', 'd'],
     swatch: 'linear-gradient(135deg, #04010c, #072a63 45%, #1ce7ff)',
+    attribution: CARTO_CREDIT,
+    leafletAttribution: CARTO_LEAFLET
+  },
+
+  linework: {
+    id: 'linework',
+    label: 'Line drawing',
+    group: 'Drawn',
+    // Same dark basemap, mapped to ink on paper instead of glow on black.
+    url: `${CARTO}/dark_all/{z}/{x}/{y}{r}.png`,
+    noLabelsUrl: `${CARTO}/dark_nolabels/{z}/{x}/{y}{r}.png`,
+    pixelStyle: 'ink',
+    maxZoom: 20,
+    subdomains: ['a', 'b', 'c', 'd'],
+    swatch: 'linear-gradient(135deg, #f3ecdf, #e4dac6 60%, #cbc0a8)',
+    attribution: CARTO_CREDIT,
+    leafletAttribution: CARTO_LEAFLET
+  },
+
+  blueprint: {
+    id: 'blueprint',
+    label: 'Blueprint',
+    group: 'Drawn',
+    url: `${CARTO}/dark_all/{z}/{x}/{y}{r}.png`,
+    noLabelsUrl: `${CARTO}/dark_nolabels/{z}/{x}/{y}{r}.png`,
+    pixelStyle: 'ink',
+    pixelColors: { ink: '#dbe9ff', paper: '#0d2b4f' },
+    maxZoom: 20,
+    subdomains: ['a', 'b', 'c', 'd'],
+    swatch: 'linear-gradient(135deg, #0d2b4f, #14406f 60%, #dbe9ff)',
     attribution: CARTO_CREDIT,
     leafletAttribution: CARTO_LEAFLET
   },
