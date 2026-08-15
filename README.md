@@ -1,8 +1,10 @@
 # City From Above
 
 Type a city, frame it, and download a high-resolution top-down image of it —
-satellite, neon, hand-drawn terrain, or ten other looks. Everything runs in the
+satellite, neon, line drawing, or eleven other looks. Everything runs in the
 browser: no backend, no build step, no API keys.
+
+**Live: <https://kupperlupperdupper.github.io/city-from-above/>**
 
 > **Screenshot placeholder.** Save a capture of the app to `docs/screenshot.png`
 > and uncomment the line below.
@@ -92,8 +94,9 @@ stops Pages from running the files through Jekyll (which would otherwise ignore
 directories beginning with an underscore and add a build step this project does
 not need).
 
-To publish: **Settings → Pages → Source: Deploy from a branch**, then pick the
-`main` branch and the `/ (root)` folder. Pushing to `main` republishes.
+This is already configured — **Settings → Pages → Source: Deploy from a branch**,
+`main` branch, `/ (root)` folder. Pushing to `main` republishes; a build takes
+about half a minute.
 
 ## File layout
 
