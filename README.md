@@ -1,10 +1,10 @@
 # Cartopress
 
 Type any place, frame it, and download it as a high-resolution map print —
-satellite, neon, line drawing, or eleven other looks. Everything runs in the
+satellite, neon, line drawing, or eight other looks. Everything runs in the
 browser: no backend, no build step, no API keys.
 
-**Live: <https://kupperlupperdupper.github.io/application.cartopress/>**
+**Live: <https://kupperlupperdupper.github.io/cartopress/>**
 
 ![Cartopress: a Leaflet preview with the export frame overlaid, and the control
 panel showing the style picker, label switch and resolution presets](docs/screenshot.png)
@@ -16,13 +16,13 @@ panel showing the style picker, label switch and resolution presets](docs/screen
 - **Frame it live** on a draggable Leaflet map. An overlay rectangle shows
   exactly the ground area that will be exported, at the aspect ratio of the
   chosen resolution.
-- **14 styles** grouped as Imagery, Cartographic, Drawn and Terrain — including
+- **11 styles** grouped as Imagery, Cartographic, Drawn and Terrain — including
   Neon, Line drawing and Blueprint, whose colours you choose yourself.
-- **Turn road names and labels off.** Three different mechanisms sit behind one
-  switch: CARTO's label-free tile variants, Esri's separate reference overlays
-  (which is also what gives satellite a proper hybrid), and layers such as
-  OpenTopoMap that bake labels into the tile and therefore cannot strip them —
-  where the switch is disabled and explains itself.
+- **Turn road names and labels off.** Esri keeps labels in separate reference
+  overlays (which is also what gives satellite a proper hybrid), so the switch
+  simply leaves them out. Layers such as OpenTopoMap bake labels into the tile
+  and therefore cannot strip them — there the switch is disabled and explains
+  itself.
 - **Pick a resolution** from square, landscape, portrait and 300 dpi print
   presets, or enter a custom size up to 6000 px per side.
 - **Set the coverage** — how wide the captured area is on the ground, from a
@@ -41,14 +41,14 @@ panel showing the style picker, label switch and resolution presets](docs/screen
 ## The drawn styles
 
 Neon, Line drawing and Blueprint are not extra tile servers. They are produced
-by remapping a basemap's luminance in `js/render.js`.
+by remapping the luminance of Esri's dark grey canvas in `js/render.js`.
 
 Posters in this style are usually made by rendering OpenStreetMap *vector* data
 — prettymaps, QGIS, or a Mapbox Studio style — which needs either a toolchain or
 an API key, and neither fits a keyless static page. But a dark raster basemap
 already encodes the road network as the bright part of a very narrow luminance
-band: the background sits around 9/255 and even wide arterials only reach about
-42/255. Normalising that band to 0..1 and looking it up in a gradient gets to
+band: water sits at 35/255, land between 71 and 81, and the roads from about 85
+up to 108. Normalising that band to 0..1 and looking it up in a gradient gets to
 the same place with nothing but a canvas — ink on paper for Line drawing, glow
 on black for Neon.
 
@@ -127,11 +127,10 @@ options**, the credit becomes yours to add wherever you publish the image.
 - **Esri World Imagery** — imagery © Esri, Maxar, Earthstar Geographics.
   Used via the public ArcGIS Online tile services.
 - **Esri basemaps** (Street, Topographic, Canvas, National Geographic,
-  Hillshade, reference overlays) — © Esri and its data partners, including
-  HERE, Garmin, USGS, NOAA, NASA, NGA and the OpenStreetMap contributors.
-- **CARTO basemaps** (Dark, Light, Voyager, and the Neon treatment built on
-  Dark) — © [CARTO](https://carto.com/attributions), map data
-  © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
+  Hillshade, reference overlays, and the Neon, Line drawing and Blueprint
+  treatments built on the dark grey canvas) — © Esri and its data partners,
+  including HERE, Garmin, USGS, NOAA, NASA, NGA and the OpenStreetMap
+  contributors.
 - **OpenTopoMap** — map data © OpenStreetMap contributors and SRTM, style
   © [OpenTopoMap](https://opentopomap.org), licensed CC-BY-SA.
 - **Nominatim / OpenStreetMap** — geocoding data

@@ -31,6 +31,10 @@ import {
  * treatment over it, so styles like Neon and Line drawing preview through
  * exactly the same code the exporter uses. Bloom is left to the exporter —
  * blurring per tile would show seams at the tile boundaries.
+ *
+ * Label overlays are composited into the same canvas before the treatment,
+ * as the exporter does, rather than added as separate layers on top — a bare
+ * label tile run through the ramp would paint paper over the whole map.
  */
 const PixelTileLayer = L.TileLayer.extend({
   createTile(coords, done) {
@@ -39,17 +43,35 @@ const PixelTileLayer = L.TileLayer.extend({
     tile.width = size;
     tile.height = size;
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      tile.getContext('2d').drawImage(img, 0, 0, size, size);
-      applyPixelStyle(tile, this.options.pixelStyle, this.options.styleColors, {
-        glow: false
-      });
-      done(null, tile);
-    };
-    img.onerror = (err) => done(err, tile);
-    img.src = this.getTileUrl(coords);
+    const urls = [
+      this.getTileUrl(coords),
+      ...(this.options.overlayUrls || []).map((template) =>
+        L.Util.template(template, { ...coords, z: this._getZoomForUrl() })
+      )
+    ];
+    const loads = urls.map(
+      (url, i) =>
+        new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => resolve(img);
+          // A missing label tile just means no labels there.
+          img.onerror = (err) => (i === 0 ? reject(err) : resolve(null));
+          img.src = url;
+        })
+    );
+
+    Promise.all(loads).then(
+      (imgs) => {
+        const ctx = tile.getContext('2d');
+        imgs.forEach((img) => img && ctx.drawImage(img, 0, 0, size, size));
+        applyPixelStyle(tile, this.options.pixelStyle, this.options.styleColors, {
+          glow: false
+        });
+        done(null, tile);
+      },
+      (err) => done(err, tile)
+    );
 
     return tile;
   }
@@ -333,15 +355,19 @@ function applyTileLayer() {
     ? new PixelTileLayer(layer.url, {
         ...baseOptions,
         pixelStyle: layer.pixelStyle,
-        styleColors: activeStyleColors()
+        styleColors: activeStyleColors(),
+        overlayUrls: layer.overlays
       })
     : L.tileLayer(layer.url, baseOptions);
   tileLayer.addTo(map);
 
-  // Label overlays sit on top of the basemap in the same pane.
-  overlayLayers = layer.overlays.map((url, i) =>
-    L.tileLayer(url, { ...common, zIndex: 10 + i }).addTo(map)
-  );
+  // Label overlays sit on top of the basemap in the same pane. Pixel-styled
+  // layers have already drawn theirs into each tile.
+  if (!layer.pixelStyle) {
+    overlayLayers = layer.overlays.map((url, i) =>
+      L.tileLayer(url, { ...common, zIndex: 10 + i }).addTo(map)
+    );
+  }
 
   el.footerAttribution.textContent =
     `${layer.attribution} · Geocoding by Nominatim / OpenStreetMap.`;
@@ -641,9 +667,9 @@ function selectLayer(id) {
 }
 
 /**
- * Not every basemap can have its labels stripped: CARTO ships label-free
- * variants, Esri's canvases keep labels in a separate overlay, but the likes of
- * OpenTopoMap bake them into the tile. Reflect that honestly in the switch.
+ * Not every basemap can have its labels stripped: Esri's canvases and imagery
+ * keep labels in a separate overlay, but the likes of OpenTopoMap bake them
+ * into the tile. Reflect that honestly in the switch.
  */
 function updateLabelSwitch() {
   const layer = getLayer(state.layerId);

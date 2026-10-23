@@ -339,9 +339,10 @@ function filterString(filter) {
 /**
  * These are luminance ramps, not filter chains.
  *
- * The dark basemap is only about 40 levels of grey deep, so pushing it around
- * with brightness/contrast crushes it into flat, banded colour. Instead,
- * normalise that narrow band to 0..1 and look the result up in a real gradient.
+ * The dark basemap's roads are only about 25 levels of grey deep, so pushing
+ * them around with brightness/contrast crushes them into flat, banded colour.
+ * Instead, normalise that narrow band to 0..1 and look the result up in a real
+ * gradient.
  * The same maths runs in the preview and in the export.
  *
  * Pixel styles: looks built by remapping the basemap's luminance rather than
@@ -408,15 +409,17 @@ export function defaultStyleColors(styleId) {
 /**
  * Black and white point of the source basemap, in 0..1 luminance.
  *
- * Measured rather than guessed: across CARTO dark tiles from dense city to open
- * country, the background sits around 9/255 and even the widest arterials only
- * reach about 42/255. The whole picture lives in a sliver at the bottom of the
- * range, which is exactly why naive brightness/contrast cannot rescue it.
+ * Measured rather than guessed: across Esri's dark grey canvas from dense city
+ * to open country, water sits at 35/255, land between 71 and 81, and the road
+ * network from about 85 up to 108, with only label halos above that. Putting
+ * black just above the land means water and land both fall to the background
+ * and the roads alone span the ramp — the whole picture lives in a sliver of
+ * the range, which is exactly why naive brightness/contrast cannot rescue it.
  * These are fixed rather than auto-levelled per tile, so neighbouring tiles
  * cannot disagree about where black is and show a seam.
  */
-const NEON_FLOOR = 0.032;
-const NEON_CEIL = 0.17;
+const NEON_FLOOR = 0.33;
+const NEON_CEIL = 0.42;
 
 /**
  * Build the ramp stops from a single chosen colour.
@@ -456,8 +459,7 @@ function neonStops(color) {
 /**
  * Ink on paper: paper below the line threshold, the line colour above it, with
  * a short blend between so antialiased streets do not turn into jagged stencil
- * edges. Water sits just above the land background in the source, so it comes
- * through as a pale wash rather than disappearing.
+ * edges. Water is darker than land in the source, so both come out as paper.
  */
 function inkStops(ink, paper) {
   const inkRgb = hexToRgb(ink);
